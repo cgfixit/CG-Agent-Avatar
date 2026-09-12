@@ -4,7 +4,7 @@ Menu-bar creature for Apple Silicon macOS. It talks to a **running** local
 [CG-Agent-Harness](https://github.com/cgfixit/CG-agent-harness) and/or
 [Ollama](https://ollama.com). It does not start either of them.
 
-<img src=“https://i.imgur.com/0QKJhgK.png”>
+[![Screenshots: local AI](https://i.imgur.com/0QKJhgK.png)](https://github.com/cgfixit/cg-agent-avatar/assets/)
 
 ## What it is
 
