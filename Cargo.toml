@@ -1,0 +1,68 @@
+[package]
+name = "cg-agent"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Menu-bar creature companion for a running CG-Agent-Harness"
+publish = false
+
+[lib]
+name = "cg_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cg-agent"
+path = "src/main.rs"
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSObjCRuntime", "NSGeometry", "NSDate", "NSTimer", "NSRunLoop", "NSNotification", "NSThread", "NSData", "NSDictionary"] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSRunningApplication",
+    "NSResponder",
+    "NSWindow",
+    "NSPanel",
+    "NSView",
+    "NSControl",
+    "NSButton",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSStatusBarButton",
+    "NSMenu",
+    "NSMenuItem",
+    "NSImage",
+    "NSColor",
+    "NSEvent",
+    "NSTextField",
+    "NSText",
+    "NSFont",
+    "NSScreen",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSTrackingArea",
+    "NSCursor",
+    "NSCell",
+    "NSActionCell",
+    "NSButtonCell",
+    "NSAccessibilityProtocols",
+    "NSAnimation",
+] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
+objc2-core-graphics = { version = "0.3", features = ["CGColor", "CGImage", "CGContext", "CGGeometry"] }
+
+[dev-dependencies]
+mockito = "1"
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
