@@ -192,8 +192,8 @@ define_class!(
                 return std::ptr::null_mut();
             };
             let self_ptr = std::ptr::from_ref(self) as *const NSView;
-            let hit_ptr = Retained::as_ptr(&view) as *const NSView;
-            if self_ptr == hit_ptr {
+            let hit_ptr = Retained::as_ptr(&view);
+            if std::ptr::eq(self_ptr, hit_ptr) {
                 std::ptr::null_mut()
             } else {
                 Retained::autorelease_return(view)
