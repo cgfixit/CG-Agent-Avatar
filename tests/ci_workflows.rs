@@ -59,3 +59,13 @@ fn bundle_pin_dtolnay_requires_toolchain_input() {
         "dtolnay/rust-toolchain@6c977a6 requires toolchain; omit fails with 'toolchain is a required input'"
     );
 }
+
+#[test]
+fn bundle_release_job_has_git_and_repo() {
+    let y = bundle_yml();
+    assert!(
+        y.matches("actions/checkout@").count() >= 2,
+        "release job needs checkout; gh release create fails without a git repo"
+    );
+    assert!(y.contains("GH_REPO: ${{ github.repository }}"));
+}
