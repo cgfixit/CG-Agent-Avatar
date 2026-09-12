@@ -34,6 +34,9 @@ jobs:
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          # Required by this action pin. Matches rust-toolchain.toml crate MSRV.
+          toolchain: 1.88
 
       - name: Package .app
         run: ./scripts/package-app.sh

@@ -50,3 +50,12 @@ fn bundle_release_is_not_on_push_only() {
     assert!(y.contains("workflow_dispatch"));
     assert!(y.contains("contents: write"));
 }
+
+#[test]
+fn bundle_pin_dtolnay_requires_toolchain_input() {
+    let y = bundle_yml();
+    assert!(
+        y.contains("toolchain: 1.88"),
+        "dtolnay/rust-toolchain@6c977a6 requires toolchain; omit fails with 'toolchain is a required input'"
+    );
+}
