@@ -59,6 +59,16 @@ open dist/CG-Agent-MacOS-Avatar.app
 The unsigned `.app` is **not** in git. Recipients build it. Ad-hoc `codesign`.
 Gatekeeper may require Open anyway.
 
+## CI artifacts and nightlies
+
+Merges to `main` upload `CG-Agent-MacOS-Avatar.zip` as a workflow artifact
+(Actions → bundle, 14-day retention).
+
+A GitHub Release is cut daily at 12:00 America/New_York (`nightly-YYYY-MM-DD`)
+and can be run by hand (Actions → bundle → Run workflow). Nightlies are
+prereleases, ad-hoc signed, not notarized. Duplicate daily tags are skipped
+when there are no new commits.
+
 ## Docs
 
 - [docs/BUILD.md](docs/BUILD.md)
