@@ -4,8 +4,7 @@ Menu-bar creature for Apple Silicon macOS. It talks to a **running** local
 [CG-Agent-Harness](https://github.com/cgfixit/CG-agent-harness) and/or
 [Ollama](https://ollama.com). It does not start either of them.
 
-Ships as `CG-Agent-MacOS-Avatar.app` (bundle id `com.cgfixit.cg-agent`).
-This GitHub repository is **private**.
+<img src=“https://github.com/cgfixit/CG-Agent-Avatar/assets/IMG_4264.jpeg”>
 
 ## What it is
 
