@@ -1,5 +1,7 @@
 # Rust advisory scan. Complements cargo-deny in ci.yml.
 # Pinning: https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions
+# cargo-audit is installed as a *tool* under RUSTUP_TOOLCHAIN=stable so
+# rust-toolchain.toml (crate MSRV 1.88) does not compile it.
 # No pull_request_target. contents: read only (no issues: write).
 
 name: audit
@@ -22,13 +24,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - name: Rust toolchain
+      - name: Rust toolchain (tool compiler, not crate MSRV)
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: stable
 
-      - name: cargo-audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-audit 0.22.2 and audit
+        env:
+          # Ignore repo rust-toolchain.toml (1.88). cargo-audit 0.22.2's
+          # unlocked graph needs rustc >= 1.96 (kstring 2.0.4).
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          set -euo pipefail
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit --version
+          cargo audit
