@@ -69,3 +69,13 @@ fn bundle_release_job_has_git_and_repo() {
     );
     assert!(y.contains("GH_REPO: ${{ github.repository }}"));
 }
+
+#[test]
+fn bundle_release_runs_on_macos() {
+    let y = bundle_yml();
+    assert!(
+        !y.contains("ubuntu-latest"),
+        "release job must run on macos-latest, not ubuntu"
+    );
+    assert_eq!(y.matches("runs-on: macos-latest").count(), 2);
+}
