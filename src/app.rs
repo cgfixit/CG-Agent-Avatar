@@ -587,6 +587,7 @@ fn cw_offset() -> f64 {
 fn spawn_workers(shared: Arc<Shared>) {
     let preferred = home::port_from_home(&home::default_home());
     shared.port.store(preferred, Ordering::SeqCst);
+    let status_ollama = Ollama::new().ok();
     std::thread::Builder::new()
         .name("cg-agent-status".into())
         .spawn({
@@ -594,7 +595,11 @@ fn spawn_workers(shared: Arc<Shared>) {
             move || loop {
                 let backend = shared.backend.load(Ordering::Relaxed);
                 let input = if backend == BACKEND_OLLAMA {
-                    match Ollama::new().and_then(|o| o.tags_ok()) {
+                    match status_ollama
+                        .as_ref()
+                        .ok_or(OllamaError::Unreachable)
+                        .and_then(|o| o.tags_ok())
+                    {
                         Ok(true) => MoodInput {
                             reachable: true,
                             http_ok: true,

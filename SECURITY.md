@@ -16,6 +16,7 @@ network, fail closed, no secrets in this tree.
 | Chat POST | Write-gate bypass | Allowlist: `GET /`, `/api/status`, `/api/sessions`; `POST /api/sessions`, `/api/chat`. No `/api/agent/*`, no `"loop"` field. CI greps the client source. | New methods must extend the allowlist and tests. |
 | Secrets | Info disclosure | Never reads `~/.CGagentHarness/.env`. No API key prompt. 401 → "use the console". | Operator may still type secrets into chat; that is harness policy. |
 | Model text | XSS / URL open (CWE-1022) | `NSTextField` string, not HTML. `display::bubble_text` strips C0/ANSI and caps length. No `open` of URLs. | A future WebView would need a new review. |
+| Backend response | Memory exhaustion (CWE-400) | Every response stream is capped at 1 MiB before text or JSON parsing; `Content-Length` is only an early rejection. | A local backend can still spend the full request timeout sending the capped prefix. |
 | Home files | Planted `harness.json` | Regular file only (no symlink), ≤64 KiB, not world-writable, port 1024–65535. | Owner-writable plant still works (same uid). |
 | CI | Supply chain | Actions pinned to full SHAs. `permissions: contents: read`. No `pull_request_target`. `cargo deny`. | Pin drift; Dependabot recommended. |
 
@@ -25,7 +26,7 @@ The bundled `CG Agent Harness.app` binds `127.0.0.1:0`, not 8790. The avatar doe
 
 ## Direct Ollama override
 
-Optional menu path. Same fail-closed HTTP rules as harness chat: `127.0.0.1:11434` only, no redirects, no forwarding headers, no API key, model tag is a **constant** (`qwen3.8:27b-mlx`), path allowlist `/v1/chat/completions` and `/api/tags`. Does not call `/api/generate` or any harness write route.
+Optional menu path. Same fail-closed HTTP rules as harness chat: `127.0.0.1:11434` only, no redirects, no forwarding headers, no API key, model tag is a **constant** (`qwen3.8:27b-mlx`), path allowlist `/v1/chat/completions` and `/api/tags`. The bundled Soul Markdown is sent as the first `system` message on Direct Ollama chat requests only. It is application data, not tool authority: the request has no `tools`, web-search, web-fetch, filesystem, process, or write capability. Does not call `/api/generate`, Ollama cloud APIs, or any harness write route.
 
 ## Darwin
 

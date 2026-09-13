@@ -2,10 +2,11 @@
 
 use std::time::Duration;
 
+use crate::http::{self, ReadError, MAX_BODY};
 use crate::origin::{LoopbackOrigin, OriginError};
 use crate::validate::{self, ValidateError};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use thiserror::Error;
 
 pub const PORT: u16 = 11434;
@@ -17,7 +18,7 @@ const USER_AGENT: &str = "cg-agent/0.1";
 const GET_TIMEOUT: Duration = Duration::from_secs(8);
 const CHAT_TIMEOUT: Duration = Duration::from_secs(720);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_BODY: u64 = 1_048_576;
+pub const SYSTEM_PROMPT: &str = include_str!("../resources/direct-ollama-system.md");
 
 #[derive(Debug, Error)]
 pub enum OllamaError {
@@ -48,7 +49,7 @@ struct ChatMessage<'a> {
 #[derive(Serialize)]
 struct ChatBody<'a> {
     model: &'static str,
-    messages: [ChatMessage<'a>; 1],
+    messages: [ChatMessage<'a>; 2],
     stream: bool,
 }
 
@@ -102,10 +103,7 @@ impl Ollama {
                 return Err(OllamaError::ResponseTooLarge);
             }
         }
-        let bytes = resp.bytes().map_err(|_| OllamaError::Json)?;
-        if bytes.len() as u64 > MAX_BODY {
-            return Err(OllamaError::ResponseTooLarge);
-        }
+        let bytes = response_bytes(resp)?;
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| OllamaError::Json)?;
         let models = v
             .get("models")
@@ -120,14 +118,7 @@ impl Ollama {
 
     pub fn chat(&self, message: &str) -> Result<String, OllamaError> {
         let message = validate::message(message)?;
-        let body = ChatBody {
-            model: MODEL,
-            messages: [ChatMessage {
-                role: "user",
-                content: message,
-            }],
-            stream: false,
-        };
+        let body = chat_body(message);
         let resp = self
             .http
             .post(self.url(POST_CHAT)?)
@@ -147,10 +138,7 @@ impl Ollama {
                 return Err(OllamaError::ResponseTooLarge);
             }
         }
-        let bytes = resp.bytes().map_err(|_| OllamaError::Json)?;
-        if bytes.len() as u64 > MAX_BODY {
-            return Err(OllamaError::ResponseTooLarge);
-        }
+        let bytes = response_bytes(resp)?;
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| OllamaError::Json)?;
         v.get("choices")
             .and_then(|c| c.get(0))
@@ -162,12 +150,32 @@ impl Ollama {
     }
 }
 
-pub fn chat_body_json(message: &str) -> Value {
-    json!({
-        "model": MODEL,
-        "messages": [{"role": "user", "content": message}],
-        "stream": false,
+fn chat_body(message: &str) -> ChatBody<'_> {
+    ChatBody {
+        model: MODEL,
+        messages: [
+            ChatMessage {
+                role: "system",
+                content: SYSTEM_PROMPT,
+            },
+            ChatMessage {
+                role: "user",
+                content: message,
+            },
+        ],
+        stream: false,
+    }
+}
+
+fn response_bytes(resp: reqwest::blocking::Response) -> Result<Vec<u8>, OllamaError> {
+    http::read_bounded(resp, MAX_BODY).map_err(|e| match e {
+        ReadError::Io => OllamaError::Json,
+        ReadError::TooLarge => OllamaError::ResponseTooLarge,
     })
+}
+
+pub fn chat_body_json(message: &str) -> Value {
+    serde_json::to_value(chat_body(message)).expect("ollama chat body")
 }
 
 #[cfg(test)]
@@ -185,8 +193,10 @@ mod tests {
         assert_eq!(v["stream"], false);
         assert!(v.get("loop").is_none());
         assert!(v.get("tools").is_none());
-        assert_eq!(v["messages"][0]["role"], "user");
-        assert_eq!(v["messages"][0]["content"], "hi");
+        assert_eq!(v["messages"][0]["role"], "system");
+        assert_eq!(v["messages"][0]["content"], SYSTEM_PROMPT);
+        assert_eq!(v["messages"][1]["role"], "user");
+        assert_eq!(v["messages"][1]["content"], "hi");
     }
 
     #[test]

@@ -27,12 +27,15 @@ Menu-bar creature for Apple Silicon macOS. It talks to a **running** local
 |---|---|
 | **Talk** | Show the strip and focus the field |
 | **Harness (127.0.0.1:8790)** | Default. `POST /api/chat` with CSRF from `GET /` |
-| **Direct Ollama (qwen3.8:27b-mlx)** | Override. `POST http://127.0.0.1:11434/v1/chat/completions` |
+| **Direct Ollama (qwen3.8:27b-mlx)** | Override. Sends the bundled Soul prompt as a system message to `POST http://127.0.0.1:11434/v1/chat/completions` |
 | **Quit CG-Agent-MacOS-Avatar** | Exit |
 
 Click the creature for Talk. Return sends. While a turn is in flight the bubble
 shows `…thinking`. If the chosen backend is down the field still types; the
 bubble says `harness asleep` or `ollama asleep`.
+
+Ollama supports web search and fetch, but this app does not expose those tools
+or send an Ollama cloud API key; Direct Ollama remains local and tool-free.
 
 ## Harness port
 
