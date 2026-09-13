@@ -26,8 +26,8 @@ Menu-bar creature for Apple Silicon macOS. It talks to a **running** local
 | Item | Effect |
 |---|---|
 | **Talk** | Show the strip and focus the field |
-| **Harness (127.0.0.1:8790)** | Default. `POST /api/chat` with CSRF from `GET /` |
-| **Direct Ollama (qwen3.8:27b-mlx)** | Override. Sends the bundled Soul prompt as a system message to `POST http://127.0.0.1:11434/v1/chat/completions` |
+| **Harness (127.0.0.1:8790)** | Optional. `POST /api/chat` with CSRF from `GET /` |
+| **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message to `POST http://127.0.0.1:11434/v1/chat/completions` |
 | **Quit CG-Agent-MacOS-Avatar** | Exit |
 
 Click the creature for Talk. Return sends. While a turn is in flight the bubble
