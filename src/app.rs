@@ -36,6 +36,7 @@ const SPEED: f64 = 1.6;
 const PNG: &[u8] = include_bytes!("../assets/creature.png");
 const BACKEND_HARNESS: u8 = 0;
 const BACKEND_OLLAMA: u8 = 1;
+const DEFAULT_BACKEND: u8 = BACKEND_OLLAMA;
 
 struct Shared {
     mood: Mutex<Mood>,
@@ -331,8 +332,8 @@ impl Delegate {
             ollama.setTarget(Some(self.as_ref()));
             quit.setTarget(Some(self.as_ref()));
         }
-        harness.setState(NSControlStateValueOn);
-        ollama.setState(NSControlStateValueOff);
+        harness.setState(NSControlStateValueOff);
+        ollama.setState(NSControlStateValueOn);
         menu.addItem(&talk);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&harness);
@@ -789,7 +790,7 @@ pub fn run() {
         in_flight: AtomicBool::new(false),
         talking: AtomicBool::new(false),
         click: AtomicBool::new(false),
-        backend: AtomicU8::new(BACKEND_HARNESS),
+        backend: AtomicU8::new(DEFAULT_BACKEND),
         port: AtomicU16::new(home::DEFAULT_PORT),
     });
     spawn_workers(Arc::clone(&shared));
@@ -799,4 +800,14 @@ pub fn run() {
     let delegate = Delegate::new(mtm, shared);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     app.run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_ollama_is_the_launch_default() {
+        assert_eq!(DEFAULT_BACKEND, BACKEND_OLLAMA);
+    }
 }
