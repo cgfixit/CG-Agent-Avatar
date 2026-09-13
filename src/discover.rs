@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::http::{self, MAX_BODY};
 use crate::origin::LoopbackOrigin;
 
 pub const OLLAMA_PORT: u16 = 11434;
@@ -95,11 +96,14 @@ pub fn probe_harness(port: u16) -> bool {
         return false;
     }
     if let Some(len) = resp.content_length() {
-        if len > 1_048_576 {
+        if len > MAX_BODY {
             return false;
         }
     }
-    let Ok(v) = resp.json::<Value>() else {
+    let Ok(bytes) = http::read_bounded(resp, MAX_BODY) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
         return false;
     };
     looks_like_harness(&v)

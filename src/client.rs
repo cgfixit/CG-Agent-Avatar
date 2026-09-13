@@ -5,6 +5,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::csrf;
+use crate::http::{self, ReadError, MAX_BODY};
 use crate::origin::{LoopbackOrigin, OriginError};
 use crate::paths;
 use crate::validate::{self, ValidateError};
@@ -18,7 +19,6 @@ const USER_AGENT: &str = "cg-agent/0.1";
 const GET_TIMEOUT: Duration = Duration::from_secs(8);
 const CHAT_TIMEOUT: Duration = Duration::from_secs(720);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_BODY: u64 = 1_048_576;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -169,12 +169,9 @@ impl Client {
         if !resp.status().is_success() {
             return Err(ClientError::CsrfMissing);
         }
-        cap_length(&resp)?;
-        let html = resp.text().map_err(|_| ClientError::CsrfMissing)?;
-        if html.len() as u64 > MAX_BODY {
-            return Err(ClientError::ResponseTooLarge);
-        }
-        self.csrf = Some(csrf::from_html(&html).ok_or(ClientError::CsrfMissing)?);
+        let bytes = response_bytes(resp)?;
+        let html = std::str::from_utf8(&bytes).map_err(|_| ClientError::CsrfMissing)?;
+        self.csrf = Some(csrf::from_html(html).ok_or(ClientError::CsrfMissing)?);
         Ok(())
     }
 
@@ -316,12 +313,16 @@ fn cap_length(resp: &reqwest::blocking::Response) -> Result<(), ClientError> {
 fn parse_json<T: for<'de> Deserialize<'de>>(
     resp: reqwest::blocking::Response,
 ) -> Result<T, ClientError> {
-    cap_length(&resp)?;
-    let bytes = resp.bytes().map_err(|_| ClientError::Json)?;
-    if bytes.len() as u64 > MAX_BODY {
-        return Err(ClientError::ResponseTooLarge);
-    }
+    let bytes = response_bytes(resp)?;
     serde_json::from_slice(&bytes).map_err(|_| ClientError::Json)
+}
+
+fn response_bytes(resp: reqwest::blocking::Response) -> Result<Vec<u8>, ClientError> {
+    cap_length(&resp)?;
+    http::read_bounded(resp, MAX_BODY).map_err(|e| match e {
+        ReadError::Io => ClientError::Json,
+        ReadError::TooLarge => ClientError::ResponseTooLarge,
+    })
 }
 
 fn map_http(resp: reqwest::blocking::Response) -> ClientError {
@@ -329,8 +330,7 @@ fn map_http(resp: reqwest::blocking::Response) -> ClientError {
     if (300..400).contains(&status) {
         return ClientError::Redirect;
     }
-    let code = resp
-        .json::<Value>()
+    let code = parse_json::<Value>(resp)
         .ok()
         .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(str::to_string))
         .unwrap_or_else(|| "HTTP".into());
