@@ -9,7 +9,7 @@ Menu-bar creature for Apple Silicon macOS. It talks to a **running** local
 ## What it is
 
 - A status-item extra: left-click the icon in the menu bar.
-- A transparent strip at the top of the display with a walking avatar.
+- A tight transparent overlay around the walking avatar and chat controls; empty space passes clicks through.
 - A text field (typing works even if backends are down).
 - A speech bubble **above** the avatar for replies.
 
