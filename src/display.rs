@@ -1,8 +1,17 @@
 //! Treat model output as untrusted text. Never HTML, never a URL opener.
 
 const MAX_BUBBLE_CHARS: usize = 400;
+const MAX_EXPANDED_CHARS: usize = 8_000;
 
 pub fn bubble_text(raw: &str) -> String {
+    sanitized_text(raw, MAX_BUBBLE_CHARS)
+}
+
+pub fn expanded_text(raw: &str) -> String {
+    sanitized_text(raw, MAX_EXPANDED_CHARS)
+}
+
+fn sanitized_text(raw: &str, max_chars: usize) -> String {
     let mut out = String::new();
     let mut chars = 0usize;
     let mut in_ansi = false;
@@ -25,7 +34,7 @@ pub fn bubble_text(raw: &str) -> String {
         }
         out.push(c);
         chars += 1;
-        if chars >= MAX_BUBBLE_CHARS {
+        if chars >= max_chars {
             out.push('…');
             break;
         }
@@ -83,5 +92,12 @@ mod tests {
     #[test]
     fn drops_nul() {
         assert_eq!(bubble_text("a\0b"), "ab");
+    }
+
+    #[test]
+    fn expanded_text_keeps_more_but_stays_bounded() {
+        let out = expanded_text(&"x".repeat(10_000));
+        assert!(out.chars().count() <= MAX_EXPANDED_CHARS + 1);
+        assert!(out.ends_with('…'));
     }
 }
