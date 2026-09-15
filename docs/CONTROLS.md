@@ -13,3 +13,5 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness/Ollama down | Field still types. Bubble says `harness asleep` / `ollama asleep` |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
+
+The overlay follows the creature but only covers the creature, bubble, and text field. Clicks elsewhere in that horizontal band go to the app underneath.

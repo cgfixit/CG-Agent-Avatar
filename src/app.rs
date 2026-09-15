@@ -32,6 +32,12 @@ use crate::validate;
 
 const STRIP_H: f64 = 200.0;
 const CREATURE_H: f64 = 88.0;
+const BUBBLE_W: f64 = 320.0;
+const BUBBLE_H: f64 = 56.0;
+const INPUT_W: f64 = 280.0;
+const INPUT_H: f64 = 24.0;
+const CREATURE_Y: f64 = 8.0;
+const INPUT_Y: f64 = 12.0;
 const SPEED: f64 = 1.6;
 const PNG: &[u8] = include_bytes!("../assets/creature.png");
 const BACKEND_HARNESS: u8 = 0;
@@ -58,9 +64,52 @@ struct Walk {
     last_mood: Mood,
 }
 
+struct OverlayLayout {
+    panel: NSRect,
+    creature: NSPoint,
+    bubble: NSPoint,
+    input: NSPoint,
+}
+
+impl OverlayLayout {
+    fn content_width(bubble_on: bool) -> f64 {
+        if bubble_on {
+            BUBBLE_W.max(cw_offset() + INPUT_W)
+        } else {
+            creature_width()
+        }
+    }
+
+    fn new(screen: NSRect, x: f64, bob: f64, bubble_on: bool) -> Self {
+        let creature_y = CREATURE_Y + bob;
+        let bubble_y = CREATURE_Y + CREATURE_H + 4.0 + bob;
+        let bottom = if bubble_on {
+            creature_y.min(INPUT_Y)
+        } else {
+            creature_y
+        };
+        let top = if bubble_on {
+            bubble_y + BUBBLE_H
+        } else {
+            creature_y + CREATURE_H
+        };
+        let strip_y = screen.origin.y + screen.size.height - STRIP_H;
+        Self {
+            panel: NSRect::new(
+                NSPoint::new(screen.origin.x + x, strip_y + bottom),
+                NSSize::new(Self::content_width(bubble_on), top - bottom),
+            ),
+            creature: NSPoint::new(0.0, creature_y - bottom),
+            bubble: NSPoint::new(0.0, bubble_y - bottom),
+            input: NSPoint::new(cw_offset(), INPUT_Y - bottom),
+        }
+    }
+}
+
 struct DelegateIvars {
     status_item: RefCell<Option<Retained<NSStatusItem>>>,
     panel: RefCell<Option<Retained<KeyPanel>>>,
+    overlay: RefCell<Option<Retained<OverlayView>>>,
     creature: RefCell<Option<Retained<CreatureView>>>,
     bubble: RefCell<Option<Retained<NSTextField>>>,
     input: RefCell<Option<Retained<NSTextField>>>,
@@ -265,6 +314,7 @@ impl Delegate {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
             status_item: RefCell::new(None),
             panel: RefCell::new(None),
+            overlay: RefCell::new(None),
             creature: RefCell::new(None),
             bubble: RefCell::new(None),
             input: RefCell::new(None),
@@ -346,11 +396,8 @@ impl Delegate {
 
         let screen = NSScreen::mainScreen(mtm).expect("screen");
         let sf = screen.frame();
-        let frame = NSRect::new(
-            NSPoint::new(sf.origin.x, sf.origin.y + sf.size.height - STRIP_H),
-            NSSize::new(sf.size.width, STRIP_H),
-        );
-        let panel = KeyPanel::new(mtm, frame);
+        let layout = OverlayLayout::new(sf, 24.0, 0.0, false);
+        let panel = KeyPanel::new(mtm, layout.panel);
         unsafe {
             panel.setReleasedWhenClosed(false);
             panel.setOpaque(false);
@@ -369,16 +416,16 @@ impl Delegate {
             panel.setIgnoresMouseEvents(false);
         }
 
-        let overlay = OverlayView::new(mtm, NSRect::new(NSPoint::ZERO, frame.size));
+        let overlay = OverlayView::new(mtm, NSRect::new(NSPoint::ZERO, layout.panel.size));
         overlay.setWantsLayer(true);
         panel.setContentView(Some(&overlay));
 
-        let cw = CREATURE_H * (589.0 / 778.0);
+        let cw = creature_width();
         let creature_img = Self::load_image();
         creature_img.setSize(NSSize::new(cw, CREATURE_H));
         let creature = CreatureView::new(
             mtm,
-            NSRect::new(NSPoint::new(24.0, 8.0), NSSize::new(cw, CREATURE_H)),
+            NSRect::new(layout.creature, NSSize::new(cw, CREATURE_H)),
             creature_img,
             Arc::clone(&self.ivars().shared),
         );
@@ -386,10 +433,7 @@ impl Delegate {
 
         let bubble = {
             let b = NSTextField::labelWithString(ns_string!(""), mtm);
-            b.setFrame(NSRect::new(
-                NSPoint::new(24.0, 8.0 + CREATURE_H + 4.0),
-                NSSize::new(320.0, 56.0),
-            ));
+            b.setFrame(NSRect::new(layout.bubble, NSSize::new(BUBBLE_W, BUBBLE_H)));
             b.setFont(Some(&NSFont::systemFontOfSize(12.0)));
             b.setTextColor(Some(&NSColor::labelColor()));
             b.setDrawsBackground(true);
@@ -403,10 +447,7 @@ impl Delegate {
         let input = unsafe {
             let f = NSTextField::initWithFrame(
                 NSTextField::alloc(mtm),
-                NSRect::new(
-                    NSPoint::new(24.0 + cw + 8.0, 12.0),
-                    NSSize::new(280.0, 24.0),
-                ),
+                NSRect::new(layout.input, NSSize::new(INPUT_W, INPUT_H)),
             );
             f.setEditable(true);
             f.setSelectable(true);
@@ -423,6 +464,7 @@ impl Delegate {
 
         *self.ivars().status_item.borrow_mut() = Some(item);
         *self.ivars().panel.borrow_mut() = Some(panel.clone());
+        *self.ivars().overlay.borrow_mut() = Some(overlay);
         *self.ivars().creature.borrow_mut() = Some(creature);
         *self.ivars().bubble.borrow_mut() = Some(bubble);
         *self.ivars().input.borrow_mut() = Some(input);
@@ -473,6 +515,12 @@ impl Delegate {
             walk.strip_on = true;
             walk.bubble_on = true;
         }
+        self.apply_layout(OverlayLayout::new(
+            NSScreen::mainScreen(self.mtm()).expect("screen").frame(),
+            self.ivars().walk.borrow().x,
+            0.0,
+            true,
+        ));
         if let Some(panel) = self.ivars().panel.borrow().as_ref() {
             panel.orderFront(None);
             panel.makeKeyAndOrderFront(None);
@@ -515,21 +563,15 @@ impl Delegate {
             .mood
             .lock()
             .unwrap_or_else(|p| p.into_inner());
+        let screen = NSScreen::mainScreen(self.mtm()).expect("screen").frame();
         let mut walk = self.ivars().walk.borrow_mut();
         if !walk.strip_on {
             drop(walk);
             return;
         }
         walk.t += 1.0;
-        let width = self
-            .ivars()
-            .panel
-            .borrow()
-            .as_ref()
-            .map(|p| p.frame().size.width)
-            .unwrap_or(800.0);
-        let cw = CREATURE_H * (589.0 / 778.0);
-        let max_x = (width - cw - 16.0).max(16.0);
+        let max_x =
+            (screen.size.width - OverlayLayout::content_width(walk.bubble_on) - 16.0).max(16.0);
         match mood {
             Mood::Thinking | Mood::Asleep => {}
             _ => {
@@ -554,9 +596,9 @@ impl Delegate {
         walk.last_mood = mood;
         drop(walk);
 
-        if let Some(c) = self.ivars().creature.borrow().as_ref() {
-            c.setFrameOrigin(NSPoint::new(x, 8.0 + bob));
-            if mood_changed {
+        self.apply_layout(OverlayLayout::new(screen, x, bob, bubble_on));
+        if mood_changed {
+            if let Some(c) = self.ivars().creature.borrow().as_ref() {
                 c.setNeedsDisplay(true);
             }
         }
@@ -572,17 +614,35 @@ impl Delegate {
                     display::bubble_text(&reply)
                 };
                 b.setStringValue(&NSString::from_str(&text));
-                b.setFrameOrigin(NSPoint::new(x, 8.0 + CREATURE_H + 4.0 + bob));
             }
-            if let Some(i) = self.ivars().input.borrow().as_ref() {
-                i.setFrameOrigin(NSPoint::new(x + cw_offset(), 12.0));
-            }
+        }
+    }
+
+    fn apply_layout(&self, layout: OverlayLayout) {
+        if let Some(panel) = self.ivars().panel.borrow().as_ref() {
+            panel.setFrame_display(layout.panel, false);
+        }
+        if let Some(overlay) = self.ivars().overlay.borrow().as_ref() {
+            overlay.setFrame(NSRect::new(NSPoint::ZERO, layout.panel.size));
+        }
+        if let Some(creature) = self.ivars().creature.borrow().as_ref() {
+            creature.setFrameOrigin(layout.creature);
+        }
+        if let Some(bubble) = self.ivars().bubble.borrow().as_ref() {
+            bubble.setFrameOrigin(layout.bubble);
+        }
+        if let Some(input) = self.ivars().input.borrow().as_ref() {
+            input.setFrameOrigin(layout.input);
         }
     }
 }
 
+fn creature_width() -> f64 {
+    CREATURE_H * (589.0 / 778.0)
+}
+
 fn cw_offset() -> f64 {
-    CREATURE_H * (589.0 / 778.0) + 8.0
+    creature_width() + 8.0
 }
 
 fn spawn_workers(shared: Arc<Shared>) {
@@ -809,5 +869,20 @@ mod tests {
     #[test]
     fn direct_ollama_is_the_launch_default() {
         assert_eq!(DEFAULT_BACKEND, BACKEND_OLLAMA);
+    }
+
+    #[test]
+    fn panel_is_only_as_large_as_the_interactive_views() {
+        let screen = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
+        let idle = OverlayLayout::new(screen, 100.0, 0.0, false);
+        assert_eq!(idle.panel.size.width, creature_width());
+        assert_eq!(idle.panel.size.height, CREATURE_H);
+
+        let talk = OverlayLayout::new(screen, 100.0, 8.0, true);
+        assert_eq!(talk.panel.size.width, cw_offset() + INPUT_W);
+        assert_eq!(talk.panel.size.height, BUBBLE_H + CREATURE_H + 8.0);
+        assert_eq!(talk.creature.x, 0.0);
+        assert!(talk.input.y >= 0.0);
+        assert!(talk.bubble.y + BUBBLE_H <= talk.panel.size.height);
     }
 }
