@@ -15,7 +15,7 @@ network, fail closed, no secrets in this tree.
 | Chat POST | Redirect SSRF | `reqwest` `redirect::Policy::none()`. 3xx → `Redirect` error. | None for this client. |
 | Chat POST | Write-gate bypass | Allowlist: `GET /`, `/api/status`, `/api/sessions`; `POST /api/sessions`, `/api/chat`. No `/api/agent/*`, no `"loop"` field. CI greps the client source. | New methods must extend the allowlist and tests. |
 | Secrets | Info disclosure | Never reads `~/.CGagentHarness/.env`. No API key prompt. 401 → "use the console". | Operator may still type secrets into chat; that is harness policy. |
-| Model text | XSS / URL open (CWE-1022) | `NSTextField` string, not HTML. `display::bubble_text` strips C0/ANSI and caps length. No `open` of URLs. | A future WebView would need a new review. |
+| Model text | XSS / URL open (CWE-1022) | `NSTextField` preview and `NSTextView` scroll pane are plain strings, not HTML. `display` strips C0/ANSI; preview caps at 400 chars and expanded text at 8,000. No `open` of URLs. | A future WebView would need a new review. |
 | Backend response | Memory exhaustion (CWE-400) | Every response stream is capped at 1 MiB before text or JSON parsing; `Content-Length` is only an early rejection. | A local backend can still spend the full request timeout sending the capped prefix. |
 | Home files | Planted `harness.json` | Regular file only (no symlink), ≤64 KiB, not world-writable, port 1024–65535. | Owner-writable plant still works (same uid). |
 | CI | Supply chain | Actions pinned to full SHAs. `permissions: contents: read`. No `pull_request_target`. `cargo deny`. | Pin drift; Dependabot recommended. |

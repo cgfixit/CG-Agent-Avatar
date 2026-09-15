@@ -10,8 +10,11 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | **Quit CG-Agent-MacOS-Avatar** | Terminate |
 | Click the creature | Same as Talk |
 | Type, Return | Send. Reply appears in the bubble **above** the avatar |
+| **See More** | Expand a reply into a scrollable pane; **See Less** collapses it |
 | Harness/Ollama down | Field still types. Bubble says `harness asleep` / `ollama asleep` |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
 
 The overlay follows the creature but only covers the creature, bubble, and text field. Clicks elsewhere in that horizontal band go to the app underneath.
+
+The initial reply bubble is 640×112 points. Expanded replies remain plain text and can scroll when longer than the available panel height.
