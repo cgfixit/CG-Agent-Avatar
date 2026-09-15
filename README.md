@@ -34,6 +34,10 @@ Click the creature for Talk. Return sends. While a turn is in flight the bubble
 shows `…thinking`. If the chosen backend is down the field still types; the
 bubble says `harness asleep` or `ollama asleep`.
 
+Replies start in a 640×112 point bubble. **See More** expands that reply into a
+scrollable plain-text pane; **See Less** returns to the bubble. This works the
+same with Harness and Direct Ollama.
+
 Ollama supports web search and fetch, but this app does not expose those tools
 or send an Ollama cloud API key; Direct Ollama remains local and tool-free.
 
