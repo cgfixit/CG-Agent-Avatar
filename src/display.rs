@@ -33,9 +33,28 @@ pub fn bubble_text(raw: &str) -> String {
     out
 }
 
+/// Compact note appended when the harness's own web_search/web_fetch tools
+/// (see cg-agent-harness src/server/chat_web.rs) contributed to this reply.
+/// This app never calls those routes itself (`paths::FORBIDDEN`); it only
+/// displays what the harness already decided to fetch under its own
+/// allowlist. Plain text — whatever this returns still passes through
+/// `bubble_text` before display, same as the rest of the reply.
+pub fn with_web_tools_note(reply: &str, tool_count: usize) -> String {
+    if tool_count == 0 {
+        return reply.to_string();
+    }
+    format!("{reply} [via web ×{tool_count}]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_tools_note_is_appended_only_when_present() {
+        assert_eq!(with_web_tools_note("hi", 0), "hi");
+        assert_eq!(with_web_tools_note("hi", 2), "hi [via web ×2]");
+    }
 
     #[test]
     fn strips_ansi_and_controls_keeps_text() {

@@ -11,11 +11,11 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType,
-    NSColor, NSCompositingOperation, NSControlStateValueOff, NSControlStateValueOn, NSEvent,
-    NSFont, NSImage, NSMenu, NSMenuItem, NSPanel, NSScreen, NSSquareStatusItemLength, NSStatusBar,
-    NSStatusItem, NSStatusWindowLevel, NSTextField, NSView, NSWindowCollectionBehavior,
-    NSWindowStyleMask,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
+    NSApplicationDelegate, NSBackingStoreType, NSColor, NSCompositingOperation,
+    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont, NSImage, NSMenu, NSMenuItem,
+    NSPanel, NSScreen, NSSecureTextField, NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
+    NSStatusWindowLevel, NSTextField, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSData, NSNotification, NSObject, NSObjectProtocol, NSPoint,
@@ -28,6 +28,7 @@ use crate::display;
 use crate::home;
 use crate::mood::{self, Mood, MoodInput};
 use crate::ollama::{self, Ollama, OllamaError};
+use crate::origin::LoopbackOrigin;
 use crate::validate;
 
 const STRIP_H: f64 = 200.0;
@@ -48,11 +49,17 @@ struct Shared {
     mood: Mutex<Mood>,
     last_reply: Mutex<String>,
     pending: Mutex<Option<String>>,
+    pending_login: Mutex<Option<(String, String)>>,
     in_flight: AtomicBool,
     talking: AtomicBool,
     click: AtomicBool,
     backend: AtomicU8,
     port: AtomicU16,
+    /// Whether the current harness `port` was last confirmed reachable over
+    /// HTTPS (fresh homes) rather than plain HTTP (legacy `tls.enabled:
+    /// false` homes). Read by both the status and chat worker threads so
+    /// they agree on which `Client` constructor to use.
+    scheme_https: AtomicBool,
 }
 
 struct Walk {
@@ -155,6 +162,11 @@ define_class!(
         #[unsafe(method(useOllama:))]
         fn use_ollama_action(&self, _sender: Option<&AnyObject>) {
             self.set_backend(BACKEND_OLLAMA);
+        }
+
+        #[unsafe(method(harnessLogin:))]
+        fn harness_login_action(&self, _sender: Option<&AnyObject>) {
+            self.prompt_harness_login();
         }
 
         #[unsafe(method(sendChat:))]
@@ -375,11 +387,13 @@ impl Delegate {
             ns_string!("Direct Ollama (qwen3.8:27b-mlx)"),
             sel!(useOllama:),
         );
+        let login = Self::menu_item(mtm, ns_string!("Harness Login…"), sel!(harnessLogin:));
         let quit = Self::menu_item(mtm, ns_string!("Quit CG-Agent-MacOS-Avatar"), sel!(quit:));
         unsafe {
             talk.setTarget(Some(self.as_ref()));
             harness.setTarget(Some(self.as_ref()));
             ollama.setTarget(Some(self.as_ref()));
+            login.setTarget(Some(self.as_ref()));
             quit.setTarget(Some(self.as_ref()));
         }
         harness.setState(NSControlStateValueOff);
@@ -388,6 +402,7 @@ impl Delegate {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&harness);
         menu.addItem(&ollama);
+        menu.addItem(&login);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&quit);
         item.setMenu(Some(&menu));
@@ -507,6 +522,68 @@ impl Delegate {
         };
         *self.ivars().shared.last_reply.lock().unwrap() = note.into();
         self.open_talk();
+    }
+
+    /// Two sequential modal prompts (username, then password) rather than
+    /// one combined accessory view — smaller surface to get wrong, and this
+    /// is a rarely-used flow. Credentials are handed to the chat worker
+    /// thread rather than sent from here: `Client::login` is a blocking
+    /// network call and must not run on the main/UI thread, and it must
+    /// reuse the exact same `Client` (and its cookie jar) the chat thread
+    /// already owns so the resulting session actually applies to later
+    /// chats.
+    fn prompt_harness_login(&self) {
+        let mtm = self.mtm();
+        let Some(username) = Self::prompt_plain_text(mtm, "Harness Login", "Username") else {
+            return;
+        };
+        let Some(password) = Self::prompt_secure_text(mtm, "Harness Login", "Password") else {
+            return;
+        };
+        if username.trim().is_empty() || password.is_empty() {
+            return;
+        }
+        *self.ivars().shared.pending_login.lock().unwrap() = Some((username, password));
+        *self.ivars().shared.last_reply.lock().unwrap() = "logging in…".into();
+        self.open_talk();
+    }
+
+    fn prompt_plain_text(mtm: MainThreadMarker, message: &str, info: &str) -> Option<String> {
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(message));
+        alert.setInformativeText(&NSString::from_str(info));
+        alert.addButtonWithTitle(ns_string!("OK"));
+        alert.addButtonWithTitle(ns_string!("Cancel"));
+        let field = unsafe {
+            NSTextField::initWithFrame(
+                NSTextField::alloc(mtm),
+                NSRect::new(NSPoint::ZERO, NSSize::new(240.0, 24.0)),
+            )
+        };
+        alert.setAccessoryView(Some(&field));
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return None;
+        }
+        Some(field.stringValue().to_string())
+    }
+
+    fn prompt_secure_text(mtm: MainThreadMarker, message: &str, info: &str) -> Option<String> {
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(message));
+        alert.setInformativeText(&NSString::from_str(info));
+        alert.addButtonWithTitle(ns_string!("OK"));
+        alert.addButtonWithTitle(ns_string!("Cancel"));
+        let field = unsafe {
+            NSSecureTextField::initWithFrame(
+                NSSecureTextField::alloc(mtm),
+                NSRect::new(NSPoint::ZERO, NSSize::new(240.0, 24.0)),
+            )
+        };
+        alert.setAccessoryView(Some(&field));
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return None;
+        }
+        Some(field.stringValue().to_string())
     }
 
     fn open_talk(&self) {
@@ -645,14 +722,30 @@ fn cw_offset() -> f64 {
     creature_width() + 8.0
 }
 
+/// A `LoopbackOrigin` + `Client` for the last-resolved harness scheme.
+/// HTTPS requires the harness's own pinned leaf certificate
+/// (`home::read_pinned_cert`) — with no cert available, an HTTPS-resolved
+/// port simply cannot be connected to yet (that itself is a meaningful,
+/// non-"asleep" state, surfaced by the caller checking for `None`).
+fn build_harness_client(port: u16, https: bool, home_dir: &std::path::Path) -> Option<Client> {
+    if https {
+        let cert = home::read_pinned_cert(home_dir)?;
+        Client::new_https(LoopbackOrigin::from_port_https(port), &cert).ok()
+    } else {
+        Client::from_port(port).ok()
+    }
+}
+
 fn spawn_workers(shared: Arc<Shared>) {
-    let preferred = home::port_from_home(&home::default_home());
+    let home_dir = home::default_home();
+    let preferred = home::port_from_home(&home_dir);
     shared.port.store(preferred, Ordering::SeqCst);
     let status_ollama = Ollama::new().ok();
     std::thread::Builder::new()
         .name("cg-agent-status".into())
         .spawn({
             let shared = Arc::clone(&shared);
+            let home_dir = home_dir.clone();
             move || loop {
                 let backend = shared.backend.load(Ordering::Relaxed);
                 let input = if backend == BACKEND_OLLAMA {
@@ -700,34 +793,33 @@ fn spawn_workers(shared: Arc<Shared>) {
                     }
                 } else {
                     {
-                        let current = shared.port.load(Ordering::Relaxed);
-                        let port = if discover::probe_harness(current) {
-                            current
+                        let pinned_cert = home::read_pinned_cert(&home_dir);
+                        let current_port = shared.port.load(Ordering::Relaxed);
+                        let current_https = shared.scheme_https.load(Ordering::Relaxed);
+                        // Re-probe the currently-cached port/scheme first so
+                        // a healthy connection doesn't pay for a full
+                        // rediscovery sweep every 2s; only fall back to
+                        // discover::resolve_reachable (https-first, then
+                        // legacy http, across the lsof candidate list) when
+                        // that fails.
+                        let still_ok = if current_https {
+                            pinned_cert.as_deref().is_some_and(|cert| {
+                                discover::probe_harness_https(current_port, cert)
+                            })
                         } else {
-                            let found = discover::resolve_port(preferred);
-                            shared.port.store(found, Ordering::SeqCst);
-                            found
+                            discover::probe_harness(current_port)
                         };
-                        match Client::from_port(port).and_then(|c| c.status()) {
-                            Ok(s) if !s.model.is_empty() => MoodInput {
-                                reachable: true,
-                                http_ok: true,
-                                api_key_optional: s.api_key_optional,
-                                model: s.model,
-                                provider: s.provider,
-                                chat_in_flight: shared.in_flight.load(Ordering::Relaxed),
-                                talking_until: shared.talking.load(Ordering::Relaxed),
-                            },
-                            Ok(_) => MoodInput {
-                                reachable: true,
-                                http_ok: false,
-                                api_key_optional: true,
-                                model: String::new(),
-                                provider: String::new(),
-                                chat_in_flight: false,
-                                talking_until: false,
-                            },
-                            Err(ClientError::Unreachable) => MoodInput {
+                        let reachable = if still_ok {
+                            Some(if current_https {
+                                discover::Reachable::Https(current_port)
+                            } else {
+                                discover::Reachable::Http(current_port)
+                            })
+                        } else {
+                            discover::resolve_reachable(preferred, pinned_cert.as_deref())
+                        };
+                        match reachable {
+                            None => MoodInput {
                                 reachable: false,
                                 http_ok: false,
                                 api_key_optional: true,
@@ -736,15 +828,60 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 chat_in_flight: false,
                                 talking_until: false,
                             },
-                            Err(_) => MoodInput {
-                                reachable: true,
-                                http_ok: false,
-                                api_key_optional: true,
-                                model: String::new(),
-                                provider: String::new(),
-                                chat_in_flight: false,
-                                talking_until: false,
-                            },
+                            Some(r) => {
+                                let (port, https) = match r {
+                                    discover::Reachable::Http(p) => (p, false),
+                                    discover::Reachable::Https(p) => (p, true),
+                                };
+                                shared.port.store(port, Ordering::SeqCst);
+                                shared.scheme_https.store(https, Ordering::SeqCst);
+                                match build_harness_client(port, https, &home_dir)
+                                    .ok_or(ClientError::Unreachable)
+                                    .and_then(|c| c.status())
+                                {
+                                    Ok(s) if !s.model.is_empty() => MoodInput {
+                                        reachable: true,
+                                        http_ok: true,
+                                        api_key_optional: s.api_key_optional,
+                                        model: s.model,
+                                        provider: s.provider,
+                                        chat_in_flight: shared.in_flight.load(Ordering::Relaxed),
+                                        talking_until: shared.talking.load(Ordering::Relaxed),
+                                    },
+                                    // Includes the thin, login-required shape
+                                    // (found the harness, no model yet since
+                                    // this client hasn't logged in) — Sick is
+                                    // the closest existing mood, matching
+                                    // pre-HTTPS behavior for this same case.
+                                    Ok(_) => MoodInput {
+                                        reachable: true,
+                                        http_ok: false,
+                                        api_key_optional: true,
+                                        model: String::new(),
+                                        provider: String::new(),
+                                        chat_in_flight: false,
+                                        talking_until: false,
+                                    },
+                                    Err(ClientError::Unreachable) => MoodInput {
+                                        reachable: false,
+                                        http_ok: false,
+                                        api_key_optional: true,
+                                        model: String::new(),
+                                        provider: String::new(),
+                                        chat_in_flight: false,
+                                        talking_until: false,
+                                    },
+                                    Err(_) => MoodInput {
+                                        reachable: true,
+                                        http_ok: false,
+                                        api_key_optional: true,
+                                        model: String::new(),
+                                        provider: String::new(),
+                                        chat_in_flight: false,
+                                        talking_until: false,
+                                    },
+                                }
+                            }
                         }
                     }
                 };
@@ -758,12 +895,45 @@ fn spawn_workers(shared: Arc<Shared>) {
         .name("cg-agent-chat".into())
         .spawn({
             let shared = Arc::clone(&shared);
+            let home_dir = home_dir.clone();
             move || {
                 let mut last_port = 0u16;
+                let mut last_https = false;
                 let mut harness = None::<Client>;
                 let ollama = Ollama::new().ok();
                 let mut session = None::<String>;
                 loop {
+                    let login = { shared.pending_login.lock().unwrap().take() };
+                    if let Some((username, password)) = login {
+                        let port = shared.port.load(Ordering::SeqCst);
+                        let https = shared.scheme_https.load(Ordering::SeqCst);
+                        if port != last_port || https != last_https || harness.is_none() {
+                            harness = build_harness_client(port, https, &home_dir);
+                            session = None;
+                            last_port = port;
+                            last_https = https;
+                        }
+                        match harness.as_mut() {
+                            Some(client) => match client.login(&username, &password) {
+                                Ok(info) if info.must_change_password => {
+                                    *shared.last_reply.lock().unwrap() =
+                                        "logged in — the bootstrap password must be changed in the harness console before chatting".into();
+                                }
+                                Ok(info) => {
+                                    session = None;
+                                    *shared.last_reply.lock().unwrap() =
+                                        format!("logged in as {}", info.username);
+                                }
+                                Err(e) => {
+                                    *shared.last_reply.lock().unwrap() = format!("login failed: {e}");
+                                }
+                            },
+                            None => {
+                                *shared.last_reply.lock().unwrap() = "harness asleep".into();
+                            }
+                        }
+                    }
+
                     let msg = { shared.pending.lock().unwrap().take() };
                     if let Some(message) = msg {
                         shared.in_flight.store(true, Ordering::SeqCst);
@@ -793,10 +963,12 @@ fn spawn_workers(shared: Arc<Shared>) {
                         } else {
                             let result = (|| {
                                 let port = shared.port.load(Ordering::SeqCst);
-                                if port != last_port {
-                                    harness = Client::from_port(port).ok();
+                                let https = shared.scheme_https.load(Ordering::SeqCst);
+                                if port != last_port || https != last_https || harness.is_none() {
+                                    harness = build_harness_client(port, https, &home_dir);
                                     session = None;
                                     last_port = port;
+                                    last_https = https;
                                 }
                                 let client = harness.as_mut().ok_or(ClientError::Unreachable)?;
                                 if session.is_none() {
@@ -806,12 +978,28 @@ fn spawn_workers(shared: Arc<Shared>) {
                             })();
                             match result {
                                 Ok(reply) => {
-                                    *shared.last_reply.lock().unwrap() = reply.reply;
+                                    let mut text = reply.reply;
+                                    if !reply.web_tools.is_empty() {
+                                        text = display::with_web_tools_note(&text, reply.web_tools.len());
+                                    }
+                                    *shared.last_reply.lock().unwrap() = text;
                                     shared.talking.store(true, Ordering::SeqCst);
                                 }
                                 Err(ClientError::ChatBusy) => {
                                     *shared.last_reply.lock().unwrap() =
                                         "busy — wait a beat".into();
+                                }
+                                Err(ClientError::LoginRequired) => {
+                                    *shared.last_reply.lock().unwrap() =
+                                        "login required — use Harness Login… in the menu".into();
+                                }
+                                Err(ClientError::PasswordChangeRequired) => {
+                                    *shared.last_reply.lock().unwrap() =
+                                        "bootstrap password must be changed — use the harness console".into();
+                                }
+                                Err(ClientError::CertMismatch) => {
+                                    *shared.last_reply.lock().unwrap() =
+                                        "harness certificate changed — verify it, then re-check trust".into();
                                 }
                                 Err(ClientError::KeyRequired) => {
                                     *shared.last_reply.lock().unwrap() =
@@ -847,11 +1035,13 @@ pub fn run() {
         mood: Mutex::new(Mood::Asleep),
         last_reply: Mutex::new(String::new()),
         pending: Mutex::new(None),
+        pending_login: Mutex::new(None),
         in_flight: AtomicBool::new(false),
         talking: AtomicBool::new(false),
         click: AtomicBool::new(false),
         backend: AtomicU8::new(DEFAULT_BACKEND),
         port: AtomicU16::new(home::DEFAULT_PORT),
+        scheme_https: AtomicBool::new(false),
     });
     spawn_workers(Arc::clone(&shared));
 
