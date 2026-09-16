@@ -37,6 +37,38 @@ fn dirs_home() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
+const MAX_CERT_BYTES: u64 = 64 * 1024;
+
+/// Read the harness's own pinned leaf certificate (`tls/server.pem`) for
+/// HTTPS connections. Fresh homes generate and persist this file per
+/// cg-agent-harness's `docs/SECURE_RESEARCH.md`; there is no other source of
+/// trust — this app never talks to the harness's tls admin CLI and never
+/// changes system/keychain trust. Same hardening as `port_from_home`:
+/// reject symlinks, world-writable files, and oversized files; only this one
+/// fixed path is ever read, never a dotenv-style config file.
+pub fn read_pinned_cert(home: &Path) -> Option<Vec<u8>> {
+    let path = home.join("tls").join("server.pem");
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() {
+        return None;
+    }
+    if meta.len() == 0 || meta.len() > MAX_CERT_BYTES {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o002 != 0 {
+            return None;
+        }
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.len() as u64 != meta.len() {
+        return None;
+    }
+    Some(bytes)
+}
+
 pub fn port_from_home(home: &Path) -> u16 {
     let path = home.join("harness.json");
     let Ok(meta) = std::fs::symlink_metadata(&path) else {
@@ -114,6 +146,52 @@ mod tests {
         {
             std::os::unix::fs::symlink(&target, dir.path().join("harness.json")).unwrap();
             assert_eq!(port_from_home(dir.path()), 8790);
+        }
+    }
+
+    #[test]
+    fn missing_cert_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_pinned_cert(dir.path()).is_none());
+    }
+
+    #[test]
+    fn reads_valid_pinned_cert() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("tls")).unwrap();
+        fs::write(
+            dir.path().join("tls").join("server.pem"),
+            "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        let bytes = read_pinned_cert(dir.path()).unwrap();
+        assert!(std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains("BEGIN CERTIFICATE"));
+    }
+
+    #[test]
+    fn oversized_cert_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("tls")).unwrap();
+        fs::write(
+            dir.path().join("tls").join("server.pem"),
+            "x".repeat(MAX_CERT_BYTES as usize + 1),
+        )
+        .unwrap();
+        assert!(read_pinned_cert(dir.path()).is_none());
+    }
+
+    #[test]
+    fn symlink_cert_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("tls")).unwrap();
+        let target = dir.path().join("elsewhere.pem");
+        fs::write(&target, "cert bytes").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, dir.path().join("tls").join("server.pem")).unwrap();
+            assert!(read_pinned_cert(dir.path()).is_none());
         }
     }
 
