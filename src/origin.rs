@@ -20,6 +20,26 @@ pub struct LoopbackOrigin {
     url: Url,
 }
 
+fn check_loopback_shape(url: &Url) -> Result<(), OriginError> {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) if ip.is_loopback() => {}
+        Some(url::Host::Ipv6(ip)) if ip.is_loopback() => {}
+        _ => return Err(OriginError::NotLoopback),
+    }
+    if url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(OriginError::InvalidUrl);
+    }
+    let path = url.path();
+    if path != "/" && !path.is_empty() {
+        return Err(OriginError::InvalidUrl);
+    }
+    Ok(())
+}
+
 impl LoopbackOrigin {
     pub fn from_port(port: u16) -> Self {
         let url = Url::parse(&format!("http://127.0.0.1:{port}")).expect("static loopback url");
@@ -31,23 +51,30 @@ impl LoopbackOrigin {
         if url.scheme() != "http" {
             return Err(OriginError::NotHttp);
         }
-        match url.host() {
-            Some(url::Host::Ipv4(ip)) if ip.is_loopback() => {}
-            Some(url::Host::Ipv6(ip)) if ip.is_loopback() => {}
-            _ => return Err(OriginError::NotLoopback),
-        }
-        if url.username() != ""
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(OriginError::InvalidUrl);
-        }
-        let path = url.path();
-        if path != "/" && !path.is_empty() {
-            return Err(OriginError::InvalidUrl);
-        }
+        check_loopback_shape(&url)?;
         Ok(Self { url })
+    }
+
+    /// Opt-in HTTPS variant for a harness home that requires TLS (fresh
+    /// homes default to `tls.enabled: true`). Callers must pin a specific
+    /// leaf certificate for the connection — this type only restricts the
+    /// scheme/host/shape, it does not by itself imply any certificate trust.
+    pub fn from_port_https(port: u16) -> Self {
+        let url = Url::parse(&format!("https://127.0.0.1:{port}")).expect("static loopback url");
+        Self { url }
+    }
+
+    pub fn parse_https(raw: &str) -> Result<Self, OriginError> {
+        let url = Url::parse(raw).map_err(|_| OriginError::InvalidUrl)?;
+        if url.scheme() != "https" {
+            return Err(OriginError::NotHttp);
+        }
+        check_loopback_shape(&url)?;
+        Ok(Self { url })
+    }
+
+    pub fn is_https(&self) -> bool {
+        self.url.scheme() == "https"
     }
 
     pub fn as_str(&self) -> &str {
@@ -147,6 +174,39 @@ mod tests {
         assert_eq!(
             LoopbackOrigin::parse("http://0.0.0.0:8790").unwrap_err(),
             OriginError::NotLoopback
+        );
+    }
+
+    #[test]
+    fn https_variant_accepts_loopback_only() {
+        let o = LoopbackOrigin::from_port_https(8790);
+        assert!(o.is_https());
+        assert_eq!(o.as_str(), "https://127.0.0.1:8790");
+        assert!(!LoopbackOrigin::from_port(8790).is_https());
+
+        assert!(LoopbackOrigin::parse_https("https://127.0.0.1:8790").is_ok());
+        assert!(LoopbackOrigin::parse_https("https://[::1]:8790").is_ok());
+        assert_eq!(
+            LoopbackOrigin::parse_https("http://127.0.0.1:8790").unwrap_err(),
+            OriginError::NotHttp
+        );
+        assert_eq!(
+            LoopbackOrigin::parse_https("https://8.8.8.8:8790").unwrap_err(),
+            OriginError::NotLoopback
+        );
+        assert_eq!(
+            LoopbackOrigin::parse_https("https://user:pass@127.0.0.1:8790").unwrap_err(),
+            OriginError::InvalidUrl
+        );
+    }
+
+    #[test]
+    fn plain_parse_still_rejects_https_unchanged() {
+        // parse() is used broadly by legacy callers; https support must be
+        // strictly opt-in via parse_https/from_port_https.
+        assert_eq!(
+            LoopbackOrigin::parse("https://127.0.0.1:8790").unwrap_err(),
+            OriginError::NotHttp
         );
     }
 
