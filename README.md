@@ -52,6 +52,10 @@ harness's own console or CLI — this app doesn't call any `/api/web/*` route
 itself, it only reads the `web_tools` field the harness's reply already
 carries and appends a short "via web ×N" note in the bubble when present.
 
+Replies start in a 640×112 point bubble. **See More** expands that reply into a
+scrollable plain-text pane; **See Less** returns to the bubble. This works the
+same with Harness and Direct Ollama.
+
 ## Harness TLS and login
 
 Fresh `cgagentharness` homes default to `tls.enabled: true` and
