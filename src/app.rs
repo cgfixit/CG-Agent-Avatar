@@ -554,12 +554,10 @@ impl Delegate {
         alert.setInformativeText(&NSString::from_str(info));
         alert.addButtonWithTitle(ns_string!("OK"));
         alert.addButtonWithTitle(ns_string!("Cancel"));
-        let field = unsafe {
-            NSTextField::initWithFrame(
-                NSTextField::alloc(mtm),
-                NSRect::new(NSPoint::ZERO, NSSize::new(240.0, 24.0)),
-            )
-        };
+        let field = NSTextField::initWithFrame(
+            NSTextField::alloc(mtm),
+            NSRect::new(NSPoint::ZERO, NSSize::new(240.0, 24.0)),
+        );
         alert.setAccessoryView(Some(&field));
         if alert.runModal() != NSAlertFirstButtonReturn {
             return None;
@@ -573,12 +571,10 @@ impl Delegate {
         alert.setInformativeText(&NSString::from_str(info));
         alert.addButtonWithTitle(ns_string!("OK"));
         alert.addButtonWithTitle(ns_string!("Cancel"));
-        let field = unsafe {
-            NSSecureTextField::initWithFrame(
-                NSSecureTextField::alloc(mtm),
-                NSRect::new(NSPoint::ZERO, NSSize::new(240.0, 24.0)),
-            )
-        };
+        let field = NSSecureTextField::initWithFrame(
+            NSSecureTextField::alloc(mtm),
+            NSRect::new(NSPoint::ZERO, NSSize::new(240.0, 24.0)),
+        );
         alert.setAccessoryView(Some(&field));
         if alert.runModal() != NSAlertFirstButtonReturn {
             return None;
