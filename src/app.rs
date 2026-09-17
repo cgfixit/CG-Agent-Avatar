@@ -77,16 +77,16 @@ struct OverlayLayout {
 }
 
 impl OverlayLayout {
-    fn content_width(bubble_on: bool) -> f64 {
+    fn content_width(bubble_on: bool, metrics: &theme::Metrics) -> f64 {
         let theme::Metrics {
             bubble_w: BUBBLE_W,
             input_w: INPUT_W,
             ..
-        } = theme::active().metrics;
+        } = *metrics;
         if bubble_on {
-            BUBBLE_W.max(cw_offset() + INPUT_W)
+            BUBBLE_W.max(cw_offset(metrics) + INPUT_W)
         } else {
-            creature_width()
+            creature_width(metrics)
         }
     }
 
@@ -98,6 +98,7 @@ impl OverlayLayout {
         reply_expanded: bool,
         reply_height: f64,
         text_height: f64,
+        metrics: &theme::Metrics,
     ) -> Self {
         let theme::Metrics {
             creature_y: CREATURE_Y,
@@ -108,7 +109,7 @@ impl OverlayLayout {
             strip_h: STRIP_H,
             see_more_w: SEE_MORE_W,
             ..
-        } = theme::active().metrics;
+        } = *metrics;
         let creature_y = CREATURE_Y + bob;
         let bubble_y = CREATURE_Y + CREATURE_H + 4.0 + bob;
         let bottom = if bubble_on {
@@ -130,13 +131,13 @@ impl OverlayLayout {
         Self {
             panel: NSRect::new(
                 NSPoint::new(screen.origin.x + x, strip_y + bottom),
-                NSSize::new(Self::content_width(bubble_on), top - bottom),
+                NSSize::new(Self::content_width(bubble_on, metrics), top - bottom),
             ),
             creature: NSPoint::new(0.0, creature_y - bottom),
             bubble: NSPoint::new(0.0, bubble_y - bottom),
             scroll: NSPoint::new(0.0, bubble_y - bottom),
             button: NSPoint::new(BUBBLE_W - SEE_MORE_W - 6.0, bubble_y - bottom + 4.0),
-            input: NSPoint::new(cw_offset(), INPUT_Y - bottom),
+            input: NSPoint::new(cw_offset(metrics), INPUT_Y - bottom),
             reply_size: NSSize::new(BUBBLE_W, reply_height),
             text_size: NSSize::new(BUBBLE_W, text_height),
         }
@@ -465,7 +466,16 @@ impl Delegate {
 
         let screen = NSScreen::mainScreen(mtm).expect("screen");
         let sf = screen.frame();
-        let layout = OverlayLayout::new(sf, 24.0, 0.0, false, false, BUBBLE_H, BUBBLE_H);
+        let layout = OverlayLayout::new(
+            sf,
+            24.0,
+            0.0,
+            false,
+            false,
+            BUBBLE_H,
+            BUBBLE_H,
+            &active.metrics,
+        );
         let panel = KeyPanel::new(mtm, layout.panel);
         unsafe {
             panel.setReleasedWhenClosed(false);
@@ -489,7 +499,7 @@ impl Delegate {
         overlay.setWantsLayer(true);
         panel.setContentView(Some(&overlay));
 
-        let cw = creature_width();
+        let cw = creature_width(&active.metrics);
         let creature_img = Self::load_image();
         creature_img.setSize(NSSize::new(cw, CREATURE_H));
         let creature = CreatureView::new(
@@ -521,6 +531,7 @@ impl Delegate {
             text.setRichText(false);
             text.setDrawsBackground(false);
             text.setFont(Some(&NSFont::systemFontOfSize(active.palette.font_size)));
+            text.setTextColor(Some(&text_color(active)));
             text
         };
         let reply_scroll = {
@@ -680,7 +691,7 @@ impl Delegate {
     }
 
     fn open_talk(&self) {
-        let bubble_h = theme::active().metrics.bubble_h;
+        let metrics = theme::active().metrics;
         {
             let mut walk = self.ivars().walk.borrow_mut();
             walk.strip_on = true;
@@ -692,8 +703,9 @@ impl Delegate {
             0.0,
             true,
             false,
-            bubble_h,
-            bubble_h,
+            metrics.bubble_h,
+            metrics.bubble_h,
+            &metrics,
         ));
         if let Some(panel) = self.ivars().panel.borrow().as_ref() {
             panel.orderFront(None);
@@ -742,7 +754,8 @@ impl Delegate {
             self.open_talk();
         }
 
-        let motion = theme::active().motion;
+        let active = theme::active();
+        let motion = active.motion;
         let mood = *self
             .ivars()
             .shared
@@ -753,15 +766,17 @@ impl Delegate {
         let reply = self.ivars().shared.last_reply.lock().unwrap().clone();
         let in_flight = self.ivars().shared.in_flight.load(Ordering::Relaxed);
         let full_text = reply_text(&reply, in_flight);
-        let (reply_height, text_height) = expanded_reply_heights(&full_text);
+        let (reply_height, text_height) = expanded_reply_heights(&full_text, &active.metrics);
         let mut walk = self.ivars().walk.borrow_mut();
         if !walk.strip_on {
             drop(walk);
             return;
         }
         walk.t += 1.0;
-        let max_x =
-            (screen.size.width - OverlayLayout::content_width(walk.bubble_on) - 16.0).max(16.0);
+        let max_x = (screen.size.width
+            - OverlayLayout::content_width(walk.bubble_on, &active.metrics)
+            - 16.0)
+            .max(16.0);
         match mood {
             Mood::Thinking | Mood::Asleep => {}
             _ => {
@@ -795,6 +810,7 @@ impl Delegate {
             reply_expanded,
             reply_height,
             text_height,
+            &active.metrics,
         ));
         if mood_changed {
             if let Some(c) = self.ivars().creature.borrow().as_ref() {
@@ -852,16 +868,12 @@ impl Delegate {
     }
 }
 
-fn creature_width() -> f64 {
-    let theme::Metrics {
-        creature_h: CREATURE_H,
-        ..
-    } = theme::active().metrics;
-    CREATURE_H * (589.0 / 778.0)
+fn creature_width(metrics: &theme::Metrics) -> f64 {
+    metrics.creature_h * (589.0 / 778.0)
 }
 
-fn cw_offset() -> f64 {
-    creature_width() + 8.0
+fn cw_offset(metrics: &theme::Metrics) -> f64 {
+    creature_width(metrics) + 8.0
 }
 
 fn ns_color(c: theme::Rgba) -> Retained<NSColor> {
@@ -911,14 +923,14 @@ fn reply_text(reply: &str, in_flight: bool) -> String {
     }
 }
 
-fn expanded_reply_heights(text: &str) -> (f64, f64) {
+fn expanded_reply_heights(text: &str, metrics: &theme::Metrics) -> (f64, f64) {
     let theme::Metrics {
         reply_chars_per_line: REPLY_CHARS_PER_LINE,
         reply_line_h: REPLY_LINE_H,
         bubble_h: BUBBLE_H,
         max_expanded_reply_h: MAX_EXPANDED_REPLY_H,
         ..
-    } = theme::active().metrics;
+    } = *metrics;
     let lines = text
         .lines()
         .map(|line| line.chars().count().max(1).div_ceil(REPLY_CHARS_PER_LINE))
@@ -1255,21 +1267,27 @@ mod tests {
 
     #[test]
     fn panel_is_only_as_large_as_the_interactive_views() {
-        // Pinned to the classic theme's own numbers rather than whatever
-        // `theme::active()` resolves to, so this stays a fixed
-        // characterization of that theme regardless of test environment.
+        // Pinned to the classic theme's own numbers via an explicit
+        // `&theme::CLASSIC.metrics` argument (not `theme::active()`), so
+        // this stays a fixed characterization of that theme no matter what
+        // `CG_AGENT_THEME` is set to in the test environment.
+        let metrics = theme::CLASSIC.metrics;
         let theme::Metrics {
             bubble_w: BUBBLE_W,
             bubble_h: BUBBLE_H,
             creature_h: CREATURE_H,
             ..
-        } = theme::CLASSIC.metrics;
+        } = metrics;
         let screen = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
-        let idle = OverlayLayout::new(screen, 100.0, 0.0, false, false, BUBBLE_H, BUBBLE_H);
-        assert_eq!(idle.panel.size.width, creature_width());
+        let idle = OverlayLayout::new(
+            screen, 100.0, 0.0, false, false, BUBBLE_H, BUBBLE_H, &metrics,
+        );
+        assert_eq!(idle.panel.size.width, creature_width(&metrics));
         assert_eq!(idle.panel.size.height, CREATURE_H);
 
-        let talk = OverlayLayout::new(screen, 100.0, 8.0, true, false, BUBBLE_H, BUBBLE_H);
+        let talk = OverlayLayout::new(
+            screen, 100.0, 8.0, true, false, BUBBLE_H, BUBBLE_H, &metrics,
+        );
         assert_eq!(talk.panel.size.width, BUBBLE_W);
         assert_eq!(talk.panel.size.height, BUBBLE_H + CREATURE_H + 8.0);
         assert_eq!(talk.creature.x, 0.0);
@@ -1279,16 +1297,17 @@ mod tests {
 
     #[test]
     fn expanded_reply_grows_then_scrolls() {
+        let metrics = theme::CLASSIC.metrics;
         let theme::Metrics {
             bubble_h: BUBBLE_H,
             max_expanded_reply_h: MAX_EXPANDED_REPLY_H,
             ..
-        } = theme::CLASSIC.metrics;
-        let (short_visible, short_full) = expanded_reply_heights("short reply");
+        } = metrics;
+        let (short_visible, short_full) = expanded_reply_heights("short reply", &metrics);
         assert_eq!(short_visible, BUBBLE_H);
         assert_eq!(short_full, BUBBLE_H);
 
-        let (visible, full) = expanded_reply_heights(&"x".repeat(8_000));
+        let (visible, full) = expanded_reply_heights(&"x".repeat(8_000), &metrics);
         assert_eq!(visible, MAX_EXPANDED_REPLY_H);
         assert!(full > visible);
     }
@@ -1297,5 +1316,26 @@ mod tests {
     fn both_backends_share_the_same_reply_renderer() {
         assert_eq!(reply_text("harness reply", false), "harness reply");
         assert_eq!(reply_text("ollama reply", false), "ollama reply");
+    }
+
+    #[test]
+    fn fable_protocol_lays_out_differently_from_classic() {
+        let screen = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
+        let for_theme = |metrics: &theme::Metrics| {
+            OverlayLayout::new(
+                screen,
+                100.0,
+                0.0,
+                true,
+                false,
+                metrics.bubble_h,
+                metrics.bubble_h,
+                metrics,
+            )
+        };
+        let classic = for_theme(&theme::CLASSIC.metrics);
+        let fable = for_theme(&theme::FABLE_PROTOCOL.metrics);
+        assert_ne!(classic.panel.size.width, fable.panel.size.width);
+        assert_ne!(classic.panel.size.height, fable.panel.size.height);
     }
 }
