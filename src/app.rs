@@ -30,22 +30,9 @@ use crate::home;
 use crate::mood::{self, Mood, MoodInput};
 use crate::ollama::{self, Ollama, OllamaError};
 use crate::origin::LoopbackOrigin;
+use crate::theme;
 use crate::validate;
 
-const STRIP_H: f64 = 200.0;
-const CREATURE_H: f64 = 88.0;
-const BUBBLE_W: f64 = 640.0;
-const BUBBLE_H: f64 = 112.0;
-const MAX_EXPANDED_REPLY_H: f64 = 420.0;
-const REPLY_LINE_H: f64 = 18.0;
-const REPLY_CHARS_PER_LINE: usize = 80;
-const SEE_MORE_W: f64 = 84.0;
-const SEE_MORE_H: f64 = 24.0;
-const INPUT_W: f64 = 280.0;
-const INPUT_H: f64 = 24.0;
-const CREATURE_Y: f64 = 8.0;
-const INPUT_Y: f64 = 12.0;
-const SPEED: f64 = 1.6;
 const PNG: &[u8] = include_bytes!("../assets/creature.png");
 const BACKEND_HARNESS: u8 = 0;
 const BACKEND_OLLAMA: u8 = 1;
@@ -91,6 +78,11 @@ struct OverlayLayout {
 
 impl OverlayLayout {
     fn content_width(bubble_on: bool) -> f64 {
+        let theme::Metrics {
+            bubble_w: BUBBLE_W,
+            input_w: INPUT_W,
+            ..
+        } = theme::active().metrics;
         if bubble_on {
             BUBBLE_W.max(cw_offset() + INPUT_W)
         } else {
@@ -107,6 +99,16 @@ impl OverlayLayout {
         reply_height: f64,
         text_height: f64,
     ) -> Self {
+        let theme::Metrics {
+            creature_y: CREATURE_Y,
+            creature_h: CREATURE_H,
+            input_y: INPUT_Y,
+            bubble_h: BUBBLE_H,
+            bubble_w: BUBBLE_W,
+            strip_h: STRIP_H,
+            see_more_w: SEE_MORE_W,
+            ..
+        } = theme::active().metrics;
         let creature_y = CREATURE_Y + bob;
         let bubble_y = CREATURE_Y + CREATURE_H + 4.0 + bob;
         let bottom = if bubble_on {
@@ -242,10 +244,11 @@ define_class!(
             let image = &self.ivars().image;
             let bounds = self.bounds();
             let mood = *self.ivars().shared.mood.lock().unwrap_or_else(|p| p.into_inner());
+            let motion = theme::active().motion;
             let fraction = match mood {
-                Mood::Asleep => 0.45,
-                Mood::Sick => 0.85,
-                _ => 1.0,
+                Mood::Asleep => motion.asleep_opacity,
+                Mood::Sick => motion.sick_opacity,
+                _ => motion.awake_opacity,
             };
             image.drawInRect_fromRect_operation_fraction(
                 bounds,
@@ -402,6 +405,17 @@ impl Delegate {
     }
 
     fn setup(&self) {
+        let active = theme::active();
+        let theme::Metrics {
+            bubble_w: BUBBLE_W,
+            bubble_h: BUBBLE_H,
+            creature_h: CREATURE_H,
+            see_more_w: SEE_MORE_W,
+            see_more_h: SEE_MORE_H,
+            input_w: INPUT_W,
+            input_h: INPUT_H,
+            ..
+        } = active.metrics;
         let mtm = self.mtm();
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -489,12 +503,10 @@ impl Delegate {
         let bubble = {
             let b = NSTextField::labelWithString(ns_string!(""), mtm);
             b.setFrame(NSRect::new(layout.bubble, NSSize::new(BUBBLE_W, BUBBLE_H)));
-            b.setFont(Some(&NSFont::systemFontOfSize(12.0)));
-            b.setTextColor(Some(&NSColor::labelColor()));
+            b.setFont(Some(&NSFont::systemFontOfSize(active.palette.font_size)));
+            b.setTextColor(Some(&text_color(active)));
             b.setDrawsBackground(true);
-            b.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
-                1.0, 1.0, 1.0, 0.94,
-            )));
+            b.setBackgroundColor(Some(&ns_color(active.palette.bubble_background)));
             b.setHidden(true);
             overlay.addSubview(&b);
             b
@@ -508,7 +520,7 @@ impl Delegate {
             text.setSelectable(true);
             text.setRichText(false);
             text.setDrawsBackground(false);
-            text.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+            text.setFont(Some(&NSFont::systemFontOfSize(active.palette.font_size)));
             text
         };
         let reply_scroll = {
@@ -520,9 +532,7 @@ impl Delegate {
             scroll.setHasHorizontalScroller(false);
             scroll.setAutohidesScrollers(true);
             scroll.setDrawsBackground(true);
-            scroll.setBackgroundColor(&NSColor::colorWithSRGBRed_green_blue_alpha(
-                1.0, 1.0, 1.0, 0.94,
-            ));
+            scroll.setBackgroundColor(&ns_color(active.palette.bubble_background));
             scroll.setDocumentView(Some(&reply_text));
             scroll.setHidden(true);
             overlay.addSubview(&scroll);
@@ -574,7 +584,7 @@ impl Delegate {
 
         unsafe {
             let _ = NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                1.0 / 30.0,
+                active.motion.tick_interval,
                 self.as_ref(),
                 sel!(tick:),
                 None,
@@ -670,6 +680,7 @@ impl Delegate {
     }
 
     fn open_talk(&self) {
+        let bubble_h = theme::active().metrics.bubble_h;
         {
             let mut walk = self.ivars().walk.borrow_mut();
             walk.strip_on = true;
@@ -681,8 +692,8 @@ impl Delegate {
             0.0,
             true,
             false,
-            BUBBLE_H,
-            BUBBLE_H,
+            bubble_h,
+            bubble_h,
         ));
         if let Some(panel) = self.ivars().panel.borrow().as_ref() {
             panel.orderFront(None);
@@ -731,6 +742,7 @@ impl Delegate {
             self.open_talk();
         }
 
+        let motion = theme::active().motion;
         let mood = *self
             .ivars()
             .shared
@@ -753,7 +765,7 @@ impl Delegate {
         match mood {
             Mood::Thinking | Mood::Asleep => {}
             _ => {
-                walk.x += walk.dir * SPEED;
+                walk.x += walk.dir * motion.walk_speed;
                 if walk.x > max_x {
                     walk.x = max_x;
                     walk.dir = -1.0;
@@ -764,9 +776,9 @@ impl Delegate {
             }
         }
         let bob = match mood {
-            Mood::Thinking => (walk.t * 0.4).sin() * 8.0,
-            Mood::Talking => 4.0,
-            _ => ((walk.t * 0.15).sin() * 2.0).abs(),
+            Mood::Thinking => (walk.t * motion.thinking_bob_freq).sin() * motion.thinking_bob_amp,
+            Mood::Talking => motion.talking_bob_offset,
+            _ => ((walk.t * motion.idle_bob_freq).sin() * motion.idle_bob_amp).abs(),
         };
         let x = walk.x;
         let bubble_on = walk.bubble_on;
@@ -841,11 +853,28 @@ impl Delegate {
 }
 
 fn creature_width() -> f64 {
+    let theme::Metrics {
+        creature_h: CREATURE_H,
+        ..
+    } = theme::active().metrics;
     CREATURE_H * (589.0 / 778.0)
 }
 
 fn cw_offset() -> f64 {
     creature_width() + 8.0
+}
+
+fn ns_color(c: theme::Rgba) -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(c.r, c.g, c.b, c.a)
+}
+
+/// The theme's ink, or the system's adaptive label color when the theme
+/// tracks Appearance instead of fixing one.
+fn text_color(active: &theme::Theme) -> Retained<NSColor> {
+    match active.palette.text_color {
+        Some(c) => ns_color(c),
+        None => NSColor::labelColor(),
+    }
 }
 
 /// A `LoopbackOrigin` + `Client` for the last-resolved harness scheme.
@@ -883,6 +912,13 @@ fn reply_text(reply: &str, in_flight: bool) -> String {
 }
 
 fn expanded_reply_heights(text: &str) -> (f64, f64) {
+    let theme::Metrics {
+        reply_chars_per_line: REPLY_CHARS_PER_LINE,
+        reply_line_h: REPLY_LINE_H,
+        bubble_h: BUBBLE_H,
+        max_expanded_reply_h: MAX_EXPANDED_REPLY_H,
+        ..
+    } = theme::active().metrics;
     let lines = text
         .lines()
         .map(|line| line.chars().count().max(1).div_ceil(REPLY_CHARS_PER_LINE))
@@ -1219,6 +1255,15 @@ mod tests {
 
     #[test]
     fn panel_is_only_as_large_as_the_interactive_views() {
+        // Pinned to the classic theme's own numbers rather than whatever
+        // `theme::active()` resolves to, so this stays a fixed
+        // characterization of that theme regardless of test environment.
+        let theme::Metrics {
+            bubble_w: BUBBLE_W,
+            bubble_h: BUBBLE_H,
+            creature_h: CREATURE_H,
+            ..
+        } = theme::CLASSIC.metrics;
         let screen = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0));
         let idle = OverlayLayout::new(screen, 100.0, 0.0, false, false, BUBBLE_H, BUBBLE_H);
         assert_eq!(idle.panel.size.width, creature_width());
@@ -1234,6 +1279,11 @@ mod tests {
 
     #[test]
     fn expanded_reply_grows_then_scrolls() {
+        let theme::Metrics {
+            bubble_h: BUBBLE_H,
+            max_expanded_reply_h: MAX_EXPANDED_REPLY_H,
+            ..
+        } = theme::CLASSIC.metrics;
         let (short_visible, short_full) = expanded_reply_heights("short reply");
         assert_eq!(short_visible, BUBBLE_H);
         assert_eq!(short_full, BUBBLE_H);

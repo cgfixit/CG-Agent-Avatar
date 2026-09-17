@@ -22,4 +22,17 @@ Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
 
 The overlay follows the creature but only covers the creature, bubble, and text field. Clicks elsewhere in that horizontal band go to the app underneath.
 
-The initial reply bubble is 640×112 points. Expanded replies remain plain text and can scroll when longer than the available panel height.
+The initial reply bubble is 640×112 points under the default **Classic** theme. Expanded replies remain plain text and can scroll when longer than the available panel height.
+
+## Design system
+
+All layout sizes, motion (walk speed, bob, frame rate), and bubble color/type come from a `Theme` in `src/theme.rs`, chosen once at launch via `CG_AGENT_THEME` (case-insensitive):
+
+| Value | Look |
+|---|---|
+| `classic` (default) | The original look above: an adaptive, translucent-white bubble that follows system light/dark mode at 30fps |
+| `fable-protocol` (or `fable`) | A second design system: a larger stage, a fixed dark-ink bubble with warm parchment text (does not follow system Appearance), and a calmer 24fps gait |
+
+```sh
+CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg-agent
+```
