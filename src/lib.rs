@@ -10,6 +10,7 @@ pub mod mood;
 pub mod ollama;
 pub mod origin;
 pub mod paths;
+pub mod theme;
 pub mod validate;
 
 #[cfg(target_os = "macos")]
