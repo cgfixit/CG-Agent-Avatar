@@ -90,6 +90,10 @@ impl OverlayLayout {
         }
     }
 
+    // Rebuilt from scratch on every animation tick from flat, non-optional
+    // layout inputs; a builder or config struct would add indirection with
+    // no caller left to simplify for.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         screen: NSRect,
         x: f64,
