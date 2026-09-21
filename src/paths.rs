@@ -11,12 +11,18 @@ pub const POST_CHAT: &str = "/api/chat";
 /// no-session, no-CSRF login endpoint (see cg-agent-harness
 /// src/server/routes/mod.rs: `/api/auth/login` sits in its `auth_open`
 /// router, outside both the CSRF-`guarded` and session-`auth_sess` layers).
-/// Narrow, explicit addition: nothing else under `/api/auth/*` (logout,
-/// password change, user admin) is allowlisted.
+/// The companion may also change the authenticated account's own password
+/// after a required bootstrap reset. It cannot manage other users.
 pub const POST_AUTH_LOGIN: &str = "/api/auth/login";
+pub const POST_AUTH_PASSWORD: &str = "/api/auth/password";
 
 pub const ALLOWED_GET: &[&str] = &[GET_ROOT, GET_STATUS, GET_SESSIONS];
-pub const ALLOWED_POST: &[&str] = &[POST_SESSIONS, POST_CHAT, POST_AUTH_LOGIN];
+pub const ALLOWED_POST: &[&str] = &[
+    POST_SESSIONS,
+    POST_CHAT,
+    POST_AUTH_LOGIN,
+    POST_AUTH_PASSWORD,
+];
 
 /// Routes the companion must never call. Documented so CI can lock the list.
 pub const FORBIDDEN: &[&str] = &[
@@ -33,7 +39,6 @@ pub const FORBIDDEN: &[&str] = &[
     "/api/memory/add",
     "/api/memory/clear",
     "/api/auth/logout",
-    "/api/auth/password",
     "/api/auth/users",
 ];
 
@@ -57,13 +62,13 @@ mod tests {
         assert!(is_allowed_post("/api/chat"));
         assert!(is_allowed_post("/api/sessions"));
         assert!(is_allowed_post("/api/auth/login"));
+        assert!(is_allowed_post("/api/auth/password"));
         assert!(!is_allowed_get("/api/status/"));
         assert!(!is_allowed_get("/api/status?x=1"));
         assert!(!is_allowed_post("/api/chat/"));
         assert!(!is_allowed_get("/api/agent/run"));
         assert!(!is_allowed_post("/api/agent/run"));
         assert!(!is_allowed_post("/api/auth/logout"));
-        assert!(!is_allowed_post("/api/auth/password"));
         assert!(!is_allowed_post("/api/auth/users"));
     }
 

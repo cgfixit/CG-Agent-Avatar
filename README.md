@@ -33,13 +33,15 @@ Menu-bar creature for Apple Silicon macOS. It talks to a **running** local
 | **Harness (127.0.0.1:8790)** | Optional. `POST /api/chat` with CSRF, over HTTPS with a pinned certificate on fresh harness homes, or plain HTTP on legacy (`tls.enabled: false`) homes |
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message to `POST http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password, then logs in so Harness-mode chat can proceed on an account-gated home |
+| **Harness Password Reset…** | After Harness Login reports a required bootstrap change, securely prompts for the current and replacement password for that same account |
 | **Quit CG-Agent-MacOS-Avatar** | Exit |
 
 Click the creature for Talk. Return sends. While a turn is in flight the bubble
 shows `…thinking`. If a backend is down the field still types; the bubble
 says `harness asleep` / `ollama asleep`, or, for a harness that answered but
 needs more from you: `login required — use Harness Login… in the menu`,
-`bootstrap password must be changed…`, or `harness certificate changed…`.
+`bootstrap password must be changed — use Harness Password Reset…`, or
+`harness certificate changed…`.
 
 Ollama's own web-search/web-fetch tools are a *cloud* feature (a free
 ollama.com account + API key; the lookup itself leaves loopback) and this app
@@ -54,7 +56,9 @@ carries and appends a short "via web ×N" note in the bubble when present.
 
 Replies start in a 640×112 point bubble. **See More** expands that reply into a
 scrollable plain-text pane; **See Less** returns to the bubble. This works the
-same with Harness and Direct Ollama.
+same with Harness and Direct Ollama. The default Classic theme pairs fixed
+dark reply text with a translucent-white background so replies stay readable
+in both light and dark macOS appearance.
 
 ## Harness TLS and login
 
@@ -73,11 +77,28 @@ This app follows that instead of only ever speaking plain HTTP:
   (`harness certificate changed…`) instead of looking "asleep".
 - **Login**: use **Harness Login…** and enter the account you set up in the
   harness's own console (default `admin` / `admin`, which the harness forces
-  you to replace on first use). This app does not manage harness accounts —
-  it only sends the one login request and keeps the resulting session for
-  later chats, the same way a browser would.
+  you to replace on first use). If that replacement is required, use
+  **Harness Password Reset…** to change only that authenticated account's
+  password. This app cannot administer accounts or change other users.
 - A legacy home with `auth.enabled: false` / `tls.enabled: false` still
   works exactly as before, over plain HTTP, no login needed.
+
+For an account-gated home:
+
+1. Select **Harness (127.0.0.1:8790)** in the menu. Login alone does not switch
+   the selected chat backend.
+2. Choose **Harness Login…**, enter the username and password, and wait for
+   the login result in the bubble.
+3. If a bootstrap replacement is required, choose **Harness Password Reset…**.
+   Enter the current password, then a new password of at least 12 characters.
+   **OK** in the new-password prompt submits the change; **Cancel** leaves it
+   unchanged. Wait for `password changed — ready to chat` before sending a message.
+
+The reset requires the current password and an authenticated session; it is
+not forgotten-password recovery. Use the Harness's own recovery tools if the
+current password is unknown. Credentials and session cookies are not saved
+to disk by Avatar, so log in again after restarting the app. Guarded requests
+fetch their CSRF token from the Harness console after login and password change.
 
 ## Harness port
 
@@ -85,7 +106,7 @@ Headless `cgagentharness serve` listens on **8790** (or `harness.json` `port`).
 
 The bundled **CG Agent Harness.app** does **not**. Its sidecar binds
 `127.0.0.1:0` (ephemeral). If `:8790` fails, this avatar looks up a
-current-user `cgagentharness` LISTEN socket on `127.0.0.1` via argv-only `lsof`,
+`cgagentharness` LISTEN socket on `127.0.0.1` via argv-only `lsof`,
 then checks `GET /api/status` looks like harness JSON (including the thin,
 pre-login shape a fresh home answers with). It does not scan the port range
 and does not use the desktop focus socket.
@@ -102,7 +123,7 @@ Apple Silicon, macOS 13+.
 open dist/CG-Agent-MacOS-Avatar.app
 ```
 
-The unsigned `.app` is **not** in git. Recipients build it. Ad-hoc `codesign`.
+The locally built `.app` is **not** in git. Recipients build it. Ad-hoc `codesign`.
 Gatekeeper may require Open anyway.
 
 ## CI artifacts and nightlies

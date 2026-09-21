@@ -1,4 +1,5 @@
-//! Loopback HTTP client for a running CG-Agent-Harness. No agentic, no writes.
+//! Loopback chat client for a running CG-Agent-Harness, with account login
+//! and self-password change. No agent execution or account administration.
 
 pub mod client;
 pub mod csrf;
