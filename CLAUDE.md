@@ -7,13 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `cg-agent` (CG-Agent-MacOS-Avatar) is a macOS menu-bar "creature" companion, written in Rust,
 targeting Apple Silicon / macOS 13+. It is a **client only**: it talks over loopback to an
 already-running [CG-Agent-Harness](https://github.com/cgfixit/CG-agent-harness) and/or a local
-Ollama instance. It never starts either backend, never runs agent jobs, and never administers
-harness accounts.
+Ollama instance. It never starts Ollama or a bare Harness process; selecting Harness launches or
+activates the installed desktop app through Launch Services. It never runs agent jobs
+or administers harness accounts.
 
 ## Commands
 
 ```sh
-./scripts/ci.sh              # local mirror of CI: fmt --check, clippy -D warnings, test, cargo deny
+./scripts/ci.sh              # local checks: fmt, Clippy, tests; cargo-deny if installed
 ./scripts/package-app.sh     # produce dist/CG-Agent-MacOS-Avatar.app
 open dist/CG-Agent-MacOS-Avatar.app
 ```
@@ -22,15 +23,17 @@ Equivalent individual commands:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings   # use Homebrew's cargo-clippy if rustup's is stuck on 1.85
-cargo test --all-targets
-cargo test --test source_contracts             # run a single integration test file
-cargo test some_test_name                      # run a single test by name
-cargo deny check                                # license/advisory checks, config in deny.toml
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets
+cargo test --locked --test source_contracts             # run a single integration test file
+cargo test --locked some_test_name                      # run a single test by name
+cargo deny --locked check                                # license/advisory checks, config in deny.toml
 ```
 
-Local builds pin Rust 1.88 via `rust-toolchain.toml`; CI uses the runner's current `stable` via a
-SHA-pinned `dtolnay/rust-toolchain`. The binary is macOS-only; on other platforms `main()` exits 2.
+Local builds pin Rust 1.88 via `rust-toolchain.toml`; put rustup's binaries first on `PATH`
+and use that toolchain's Clippy. CI tests stable on Ubuntu/macOS and Rust 1.88 on macOS;
+packaging uses Rust 1.88. Toolchain actions are SHA-pinned. See `docs/BUILD.md` for audit
+tool versions and network requirements. The binary is macOS-only; on other platforms `main()` exits 2.
 
 The built `.app` is ad-hoc codesigned (`codesign -s -`), not notarized, and is not committed to
 git — recipients build it themselves.
