@@ -1,6 +1,7 @@
 # Security
 
-Companion for a **running** loopback CG-Agent-Harness. It is not the harness.
+A loopback chat client for CG-Agent-Harness and Direct Ollama. Selecting Harness
+may launch its desktop app through Launch Services; Avatar is not an agent runner.
 It must not weaken harness I6, CSRF, or write gates.
 
 CISA [Secure by Design](https://www.cisa.gov/securebydesign): default-deny
@@ -22,7 +23,7 @@ network, fail closed, no secrets in this tree.
 | Harness login and password change | Credential handling | The username uses a native text field; passwords use `NSSecureTextField` prompts. The worker sends login to `POST /api/auth/login` (no CSRF by Harness design), or current/new passwords to guarded `POST /api/auth/password`. Avatar does not persist credentials or log request bodies; errors carry Harness error codes. Session cookies, including the replacement cookie after a password change, stay in the worker's in-memory cookie jar. | Password strings are dropped after use, not securely zeroized. A compromised local process with debugger access could read process memory. |
 | Harness launch | Wrong app launched / arbitrary process execution | Selecting Harness mode calls `NSWorkspace.URLForApplicationWithBundleIdentifier`/`openApplicationAtURL` to resolve and launch strictly by the harness desktop app's own `CFBundleIdentifier` (`com.cgfixit.agent-harness`, verified against `cg-agent-harness/desktop/Info.plist`) via Launch Services — never a hardcoded filesystem path, never a spawned bare process, never with arguments (`tests/source_contracts.rs::launch_uses_bundle_identifier_never_a_hardcoded_path`). Relaunching an already-running instance activates it (`NSWorkspaceOpenConfiguration`'s default `createsNewApplicationInstance: false`) rather than duplicating it; the harness's own home-scoped instance lock is a second, independent line of defense. | If a different, unrelated app were registered under that exact bundle identifier, Launch Services could resolve to it instead — the same trust class as any bundle-id launch on this OS, not unique to this app. If the harness isn't installed, nothing is launched. |
 | Chat reply | Trusting harness-reported web use | `web_tools` from `/api/chat` is only ever displayed as a short "via web ×N" count — this app never fetches, renders, or opens the underlying pages itself, and never calls `/api/web/*`. | The harness's own web-fetch trust boundary (its URL allowlist, SerpAPI/public-Google fallback) is unchanged by this app either way. |
-| CI | Supply chain | Actions pinned to full SHAs. `permissions: contents: read`. No `pull_request_target`. `cargo deny`. | Pin drift; Dependabot recommended. |
+| CI | Supply chain | Actions pinned to full SHAs. `permissions: contents: read`. No `pull_request_target`. `cargo deny`. | Weekly Dependabot updates cover Cargo and Actions; pins still require review. Local audit tools must understand current advisory formats. |
 
 ## Desktop sidecar discovery
 

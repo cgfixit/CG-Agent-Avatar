@@ -5,7 +5,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Input | Action |
 |---|---|
 | **Talk** | Show the strip, focus the text field (works offline) |
-| **Harness (127.0.0.1:8790)** | Optional. Launches the bundled `CG Agent Harness.app` (by bundle identifier) if it isn't already running, then tries `:8790` and finds the desktop `.app` sidecar on `127.0.0.1`; HTTPS with a pinned certificate on fresh homes, plain HTTP on legacy homes |
+| **Harness (127.0.0.1:8790)** | Optional. Launches the bundled `CG Agent Harness.app` (by bundle identifier) if it isn't already running, then tries the configured port (8790 by default) and finds the desktop `.app` sidecar on `127.0.0.1`; HTTPS with a pinned certificate on fresh homes, plain HTTP on legacy homes |
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message via `http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password (native secure text entry), then logs in for later Harness chats |
 | **Harness Password Reset…** | After logging in with a bootstrap password, securely replaces only that authenticated account's password |
@@ -20,6 +20,10 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness reply used web search | Bubble appends a compact `[via web ×N]` note — this app only displays that, it never fetches pages itself |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
+Direct Ollama sends only the current message plus the bundled system prompt;
+Harness uses a server-side session. The input accepts up to 32,768 characters
+after trimming, rejects NUL characters, and leaves invalid input unsent.
+This is a character limit, not a token-context setting.
 
 Harness Login and Password Reset do not select a chat backend: choose
 **Harness (127.0.0.1:8790)** before sending a Harness message. Wait for login
@@ -29,7 +33,7 @@ the password. Account sessions last only for the running Avatar process.
 
 The overlay follows the creature but only covers the creature, bubble, and text field. Clicks elsewhere in that horizontal band go to the app underneath.
 
-The initial reply bubble is 640×112 points under the default **Classic** theme. Expanded replies remain plain text and can scroll when longer than the available panel height.
+The initial reply bubble is 640×112 points under the default **Classic** theme. Expanded replies remain plain text and can scroll when longer than the available panel height. The preview caps at 400 characters and the expanded text at 8,000, with an ellipsis at the limit. Classic expansion caps at 420 points; Fable Protocol caps at 480.
 
 ## Design system
 
@@ -43,3 +47,19 @@ All layout sizes, motion (walk speed, bob, frame rate), and bubble color/type co
 ```sh
 CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg-agent
 ```
+
+## Troubleshooting
+
+| Observation | Check |
+|---|---|
+| `ollama asleep` | Start the local service on `127.0.0.1:11434`; Avatar does not launch it. Confirm it serves the fixed model tag, not just an empty model list. |
+| `ollama http 404` or a model error | Confirm `/v1/chat/completions` is available and `qwen3.8:27b-mlx` is installed in that service. The model is not configurable in the menu. |
+| `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
+| Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
+| Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |
+| Certificate mismatch | Verify Harness's certificate and home. Avatar does not offer a bypass or change Keychain trust. |
+| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. |
+
+For fresh native examples, see the [README screenshots](../README.md) and
+[capture provenance](screenshots/README.md). For build errors, see
+[BUILD.md](BUILD.md).
