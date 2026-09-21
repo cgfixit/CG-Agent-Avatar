@@ -7,6 +7,7 @@ pub mod discover;
 pub mod display;
 pub mod home;
 mod http;
+pub mod launch;
 pub mod mood;
 pub mod ollama;
 pub mod origin;

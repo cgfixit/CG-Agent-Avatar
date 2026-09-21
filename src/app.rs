@@ -196,6 +196,11 @@ define_class!(
         #[unsafe(method(useHarness:))]
         fn use_harness_action(&self, _sender: Option<&AnyObject>) {
             self.set_backend(BACKEND_HARNESS);
+            if !crate::launch::launch_harness_app() {
+                *self.ivars().shared.last_reply.lock().unwrap() =
+                    "CG Agent Harness.app not found — install it, or run `cgagentharness serve`"
+                        .into();
+            }
         }
 
         #[unsafe(method(useOllama:))]

@@ -2,7 +2,10 @@
 
 Menu-bar creature for Apple Silicon macOS. It talks to a **running** local
 [CG-Agent-Harness](https://github.com/cgfixit/CG-agent-harness) and/or
-[Ollama](https://ollama.com). It does not start either of them.
+[Ollama](https://ollama.com). It does not start Ollama, and it never spawns
+the harness as a bare process — selecting Harness mode launches the bundled
+**CG Agent Harness.app** via macOS Launch Services if it isn't already
+running (see [Harness launch](#harness-launch) below).
 
 [![Screenshots: local AI](https://i.imgur.com/0QKJhgK.png)](https://github.com/cgfixit/cg-agent-avatar/assets/)
 
@@ -112,6 +115,17 @@ pre-login shape a fresh home answers with). It does not scan the port range
 and does not use the desktop focus socket.
 
 You cannot run the desktop `.app` and `serve` on the same home at once (home lock).
+
+## Harness launch
+
+Selecting **Harness (127.0.0.1:8790)** in the menu asks macOS Launch Services
+to launch **CG Agent Harness.app** by its own bundle identifier
+(`com.cgfixit.agent-harness`) — the same mechanism as `open -a` or a Dock
+click. This app never spawns `cgagentharness serve` itself, never touches a
+filesystem path for it, and never passes it arguments. If the harness is
+already running, this just activates it instead of starting a second copy;
+if it isn't installed at all, nothing happens and the field still types. See
+[SECURITY.md](SECURITY.md) for the threat model this is reviewed against.
 
 ## Build
 

@@ -66,6 +66,23 @@ fn discover_does_not_scan_or_touch_focus_socket() {
 }
 
 #[test]
+fn launch_uses_bundle_identifier_never_a_hardcoded_path() {
+    let src = include_str!("../src/launch.rs");
+    assert!(
+        !src.contains("/Applications"),
+        "launch.rs must resolve the harness app by bundle identifier, not a hardcoded path"
+    );
+    assert!(
+        !src.contains("Command::new"),
+        "launch.rs must not spawn a process"
+    );
+    assert_eq!(
+        cg_agent::launch::HARNESS_BUNDLE_ID,
+        "com.cgfixit.agent-harness"
+    );
+}
+
+#[test]
 fn ollama_relay_is_loopback_openai_compat_only() {
     let src = include_str!("../src/ollama.rs");
     let prod = src.split("#[cfg(test)]").next().expect("prod");
