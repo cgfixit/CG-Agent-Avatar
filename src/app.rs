@@ -66,6 +66,43 @@ struct Walk {
     last_mood: Mood,
 }
 
+/// Text and height are independent of the creature's animation. Retain them
+/// until the reply or thinking state changes; replacing NSTextView's contents
+/// on each tick also discards a user's selection.
+struct ReplyPresentation {
+    raw: String,
+    in_flight: bool,
+    preview: String,
+    full: String,
+    heights: (f64, f64),
+}
+
+impl ReplyPresentation {
+    fn new(metrics: &theme::Metrics) -> Self {
+        let full = reply_text("", false);
+        Self {
+            raw: String::new(),
+            in_flight: false,
+            preview: preview_text("", false),
+            heights: expanded_reply_heights(&full, metrics),
+            full,
+        }
+    }
+
+    fn update(&mut self, reply: &str, in_flight: bool, metrics: &theme::Metrics) -> bool {
+        if self.raw == reply && self.in_flight == in_flight {
+            return false;
+        }
+        self.raw.clear();
+        self.raw.push_str(reply);
+        self.in_flight = in_flight;
+        self.preview = preview_text(reply, in_flight);
+        self.full = reply_text(reply, in_flight);
+        self.heights = expanded_reply_heights(&self.full, metrics);
+        true
+    }
+}
+
 struct OverlayLayout {
     panel: NSRect,
     creature: NSPoint,
@@ -162,6 +199,7 @@ struct DelegateIvars {
     harness_item: RefCell<Option<Retained<NSMenuItem>>>,
     ollama_item: RefCell<Option<Retained<NSMenuItem>>>,
     walk: RefCell<Walk>,
+    reply_presentation: RefCell<ReplyPresentation>,
     shared: Arc<Shared>,
 }
 
@@ -399,6 +437,7 @@ impl Delegate {
                 reply_expanded: false,
                 last_mood: Mood::Asleep,
             }),
+            reply_presentation: RefCell::new(ReplyPresentation::new(&theme::active().metrics)),
             shared,
         });
         unsafe { msg_send![super(this), init] }
@@ -533,7 +572,10 @@ impl Delegate {
         overlay.addSubview(&creature);
 
         let bubble = {
-            let b = NSTextField::labelWithString(ns_string!(""), mtm);
+            let b = NSTextField::labelWithString(
+                &NSString::from_str(&self.ivars().reply_presentation.borrow().preview),
+                mtm,
+            );
             b.setFrame(NSRect::new(layout.bubble, NSSize::new(BUBBLE_W, BUBBLE_H)));
             b.setFont(Some(&NSFont::systemFontOfSize(active.palette.font_size)));
             b.setTextColor(Some(&text_color(active)));
@@ -551,6 +593,9 @@ impl Delegate {
             text.setEditable(false);
             text.setSelectable(true);
             text.setRichText(false);
+            text.setString(&NSString::from_str(
+                &self.ivars().reply_presentation.borrow().full,
+            ));
             text.setDrawsBackground(false);
             text.setFont(Some(&NSFont::systemFontOfSize(active.palette.font_size)));
             text.setTextColor(Some(&text_color(active)));
@@ -814,10 +859,22 @@ impl Delegate {
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let screen = NSScreen::mainScreen(self.mtm()).expect("screen").frame();
-        let reply = self.ivars().shared.last_reply.lock().unwrap().clone();
         let in_flight = self.ivars().shared.in_flight.load(Ordering::Relaxed);
-        let full_text = reply_text(&reply, in_flight);
-        let (reply_height, text_height) = expanded_reply_heights(&full_text, &active.metrics);
+        let mut presentation = self.ivars().reply_presentation.borrow_mut();
+        let text_changed = presentation.update(
+            &self.ivars().shared.last_reply.lock().unwrap(),
+            in_flight,
+            &active.metrics,
+        );
+        let (reply_height, text_height) = presentation.heights;
+        if text_changed {
+            if let Some(b) = self.ivars().bubble.borrow().as_ref() {
+                b.setStringValue(&NSString::from_str(&presentation.preview));
+            }
+            if let Some(text) = self.ivars().reply_text.borrow().as_ref() {
+                text.setString(&NSString::from_str(&presentation.full));
+            }
+        }
         let mut walk = self.ivars().walk.borrow_mut();
         if !walk.strip_on {
             drop(walk);
@@ -871,17 +928,13 @@ impl Delegate {
 
         if bubble_on {
             if let Some(b) = self.ivars().bubble.borrow().as_ref() {
-                b.setStringValue(&NSString::from_str(&preview_text(&reply, in_flight)));
                 b.setHidden(reply_expanded);
-            }
-            if let Some(text) = self.ivars().reply_text.borrow().as_ref() {
-                text.setString(&NSString::from_str(&full_text));
             }
             if let Some(scroll) = self.ivars().reply_scroll.borrow().as_ref() {
                 scroll.setHidden(!reply_expanded);
             }
             if let Some(button) = self.ivars().see_more.borrow().as_ref() {
-                button.setHidden(in_flight || reply.is_empty());
+                button.setHidden(in_flight || presentation.raw.is_empty());
                 button.setTitle(if reply_expanded {
                     ns_string!("See Less")
                 } else {
@@ -1394,6 +1447,45 @@ mod tests {
     fn both_backends_share_the_same_reply_renderer() {
         assert_eq!(reply_text("harness reply", false), "harness reply");
         assert_eq!(reply_text("ollama reply", false), "ollama reply");
+    }
+
+    #[test]
+    fn unchanged_reply_does_not_replace_native_text_on_animation_ticks() {
+        let metrics = theme::CLASSIC.metrics;
+        let mut presentation = ReplyPresentation::new(&metrics);
+        assert_eq!(presentation.preview, "type below, Return to send");
+        assert!(presentation.update("a completed reply", false, &metrics));
+        for _ in 0..60 {
+            assert!(!presentation.update("a completed reply", false, &metrics));
+        }
+        assert_eq!(presentation.full, "a completed reply");
+
+        // A repeated answer still needs rendering when a thinking turn ends.
+        assert!(presentation.update("a completed reply", true, &metrics));
+        assert_eq!(presentation.full, "…thinking");
+        assert!(presentation.update("a completed reply", false, &metrics));
+        assert_eq!(presentation.full, "a completed reply");
+        assert!(presentation.update("", false, &metrics));
+        assert_eq!(presentation.full, "type below, Return to send");
+    }
+
+    #[test]
+    fn changed_replies_refresh_sanitization_limits_and_height_for_both_themes() {
+        for metrics in [theme::CLASSIC.metrics, theme::FABLE_PROTOCOL.metrics] {
+            let mut presentation = ReplyPresentation::new(&metrics);
+            let raw = format!("\u{1b}[31m{}\0", "界".repeat(9_000));
+            assert!(presentation.update(&raw, false, &metrics));
+            assert_eq!(presentation.preview.chars().count(), 401);
+            assert_eq!(presentation.full.chars().count(), 8_001);
+            assert!(!presentation.full.contains('\u{1b}'));
+            assert!(!presentation.full.contains('\0'));
+            assert_eq!(presentation.heights.0, metrics.max_expanded_reply_h);
+            assert!(presentation.heights.1 > presentation.heights.0);
+
+            assert!(presentation.update("short", false, &metrics));
+            assert_eq!(presentation.full, "short");
+            assert_eq!(presentation.heights, (metrics.bubble_h, metrics.bubble_h));
+        }
     }
 
     #[test]
