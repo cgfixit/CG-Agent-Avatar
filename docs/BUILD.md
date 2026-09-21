@@ -11,7 +11,11 @@ open dist/CG-Agent-MacOS-Avatar.app
 
 If `cargo clippy` binds an old rustup (1.85), use Homebrew's `cargo-clippy` instead. CI installs current `stable` via a SHA-pinned `dtolnay/rust-toolchain`.
 
-The creature is a **client**. It does not start Ollama or CG-Agent-Harness. Run:
+The creature is a **client**. It does not start Ollama, and never spawns the
+harness as a bare process — selecting Harness mode in the menu launches the
+bundled `CG Agent Harness.app` by bundle identifier via macOS Launch
+Services if it isn't already running (see [Harness launch](../README.md#harness-launch)).
+For a headless setup, or to use `serve` directly, run:
 
 ```sh
 cgagentharness serve

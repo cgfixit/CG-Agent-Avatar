@@ -69,6 +69,11 @@ The crate is `lib.rs` + `main.rs`, with `main` just calling `app::run()` on macO
 - **`ollama.rs`** — Direct Ollama backend: posts the bundled Soul system prompt to
   `POST http://127.0.0.1:11434/v1/chat/completions`. Stays local and tool-free (does not use
   Ollama's cloud web-search/fetch tools).
+- **`launch.rs`** — the one deliberate exception to "does not start the harness": launches the
+  bundled `CG Agent Harness.app` by its `CFBundleIdentifier` via macOS Launch Services when the
+  user selects Harness mode. The bundle-id constant is portable/tested on any OS; the actual
+  `NSWorkspace` call is `#[cfg(target_os = "macos")]`. Never a hardcoded path, never a spawned
+  process. See `SECURITY.md`'s "Harness launch" row.
 - **`mood.rs`** — pure derivation of a `Mood` enum (Asleep/Idle/Thinking/Talking/Sick) from harness
   status + in-flight chat state. No ML, just state mapping.
 - **`theme.rs`** — the design system (layout/motion/color/type tokens) shared by every overlay

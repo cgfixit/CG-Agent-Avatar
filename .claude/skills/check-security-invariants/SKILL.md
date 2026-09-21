@@ -27,6 +27,7 @@ cargo test --test source_contracts --test lsof_argv --test plist_contract --test
 | `discover.rs` uses argv-only `/usr/sbin/lsof -i4TCP@127.0.0.1 -sTCP:LISTEN`, never `sh -c`/`bash -c`, never `localhost` | `lsof_argv.rs::discover_lsof_is_argv_only_loopback` |
 | Discovery skips Ollama's port and privileged ports | `lsof_argv.rs::discover_skips_ollama_and_privileged_ports` |
 | `ollama.rs` production code only calls `/v1/chat/completions`, never `/api/generate`; model tag is the constant `qwen3.8:27b-mlx`; request JSON has no `loop` key | `source_contracts.rs::ollama_relay_is_loopback_openai_compat_only` |
+| `launch.rs` launches the harness only by `CFBundleIdentifier` (`com.cgfixit.agent-harness`), never a hardcoded `/Applications` path, never `Command::new` | `source_contracts.rs::launch_uses_bundle_identifier_never_a_hardcoded_path` |
 | Bundle id `com.cgfixit.cg-agent`, `LSUIElement` true (no Dock) | `plist_contract.rs::bundle_identity`, `::accessory_no_dock` |
 | ATS: `NSAllowsLocalNetworking` present, `NSAllowsArbitraryLoads` absent | `plist_contract.rs::ats_local_networking_only` |
 | `audit.yml` doesn't use `rustsec/audit-check` (installs unpinned cargo-audit); installs `cargo-audit --locked --version 0.22.2` with `RUSTUP_TOOLCHAIN` set | `ci_workflows.rs::audit_does_not_use_rustsec_audit_check`, `::audit_installs_cargo_audit_locked_and_versioned` |
