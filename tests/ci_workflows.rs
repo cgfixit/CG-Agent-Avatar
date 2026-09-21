@@ -79,3 +79,46 @@ fn bundle_release_runs_on_macos() {
     );
     assert_eq!(y.matches("runs-on: macos-latest").count(), 2);
 }
+
+#[test]
+fn builds_and_checks_reject_lockfile_drift() {
+    for source in [
+        include_str!("../.github/workflows/ci.yml"),
+        include_str!("../scripts/ci.sh"),
+        include_str!("../scripts/package-app.sh"),
+    ] {
+        for line in source.lines().filter(|line| {
+            ["cargo build", "cargo test", "cargo clippy", "cargo deny"]
+                .iter()
+                .any(|command| line.contains(command))
+        }) {
+            assert!(
+                line.contains("--locked"),
+                "unlocked Cargo invocation: {line}"
+            );
+        }
+    }
+    assert!(
+        include_str!("../.github/workflows/ci.yml").contains("arguments: --all-features --locked")
+    );
+}
+
+#[test]
+fn pull_requests_test_the_release_toolchain_on_macos() {
+    let toolchain = include_str!("../rust-toolchain.toml")
+        .lines()
+        .find_map(|line| line.strip_prefix("channel = \""))
+        .unwrap()
+        .trim_end_matches('"');
+    let ci = include_str!("../.github/workflows/ci.yml");
+    let msrv = ci
+        .split("  msrv:")
+        .nth(1)
+        .unwrap()
+        .split("  deny:")
+        .next()
+        .unwrap();
+    assert!(msrv.contains("runs-on: macos-latest"));
+    assert!(msrv.contains(&format!("toolchain: {toolchain}")));
+    assert!(msrv.contains("cargo test --locked --all-targets"));
+}

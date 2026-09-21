@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 app="CG-Agent-MacOS-Avatar.app"
-cargo build --release
+cargo build --locked --release
 rm -rf "$root/dist/CG-Agent.app" "$root/dist/$app"
 dist="$root/dist/$app/Contents"
 mkdir -p "$dist/MacOS" "$dist/Resources"
