@@ -3,9 +3,9 @@
 //! in `app.rs` so a new visual identity is a new [`Theme`] value rather than
 //! a hunt through `draw` calls for magic numbers.
 //!
-//! [`CLASSIC`] is the app's original, unnamed look, extracted verbatim from
-//! the constants and inline color/font literals that used to live in
-//! `app.rs`. [`FABLE_PROTOCOL`] is a second, distinct system built the same
+//! [`CLASSIC`] preserves the app's original geometry and motion, with fixed
+//! dark reply ink for contrast on its white bubble. [`FABLE_PROTOCOL`] is a
+//! second, distinct system built the same
 //! way. Pick one per run with `CG_AGENT_THEME=classic` or
 //! `CG_AGENT_THEME=fable-protocol` (see [`active`]); `classic` stays the
 //! default so existing behavior is unchanged unless asked for otherwise.
@@ -83,9 +83,8 @@ pub struct Theme {
     pub palette: Palette,
 }
 
-/// The app's original look: an adaptive, translucent-white bubble that
-/// follows system light/dark mode, at a brisk 30fps. Values match the
-/// app's original hardcoded constants exactly.
+/// The app's original look: a translucent-white bubble with fixed dark ink,
+/// so it remains legible in either system Appearance, at a brisk 30fps.
 pub const CLASSIC: Theme = Theme {
     name: "classic",
     metrics: Metrics {
@@ -117,7 +116,7 @@ pub const CLASSIC: Theme = Theme {
     },
     palette: Palette {
         bubble_background: Rgba::new(1.0, 1.0, 1.0, 0.94),
-        text_color: None,
+        text_color: Some(Rgba::new(0.08, 0.08, 0.1, 1.0)),
         font_size: 12.0,
     },
 };
@@ -209,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn classic_matches_the_apps_original_hardcoded_constants() {
+    fn classic_preserves_geometry_and_pairs_white_background_with_dark_ink() {
         let m = CLASSIC.metrics;
         assert_eq!(
             (m.strip_h, m.creature_h, m.bubble_w, m.bubble_h),
@@ -218,7 +217,8 @@ mod tests {
         assert_eq!(CLASSIC.motion.walk_speed, 1.6);
         assert_eq!(CLASSIC.motion.tick_interval, 1.0 / 30.0);
         assert_eq!(CLASSIC.palette.font_size, 12.0);
-        assert!(CLASSIC.palette.text_color.is_none());
+        let ink = CLASSIC.palette.text_color.expect("classic reply ink");
+        assert!(ink.r < 0.2 && ink.g < 0.2 && ink.b < 0.2);
     }
 
     #[test]

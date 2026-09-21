@@ -43,6 +43,7 @@ struct Shared {
     last_reply: Mutex<String>,
     pending: Mutex<Option<String>>,
     pending_login: Mutex<Option<(String, String)>>,
+    pending_password_change: Mutex<Option<(String, String)>>,
     in_flight: AtomicBool,
     talking: AtomicBool,
     click: AtomicBool,
@@ -205,6 +206,11 @@ define_class!(
         #[unsafe(method(harnessLogin:))]
         fn harness_login_action(&self, _sender: Option<&AnyObject>) {
             self.prompt_harness_login();
+        }
+
+        #[unsafe(method(harnessPasswordReset:))]
+        fn harness_password_reset_action(&self, _sender: Option<&AnyObject>) {
+            self.prompt_harness_password_reset();
         }
 
         #[unsafe(method(sendChat:))]
@@ -447,12 +453,18 @@ impl Delegate {
             sel!(useOllama:),
         );
         let login = Self::menu_item(mtm, ns_string!("Harness Login…"), sel!(harnessLogin:));
+        let reset = Self::menu_item(
+            mtm,
+            ns_string!("Harness Password Reset…"),
+            sel!(harnessPasswordReset:),
+        );
         let quit = Self::menu_item(mtm, ns_string!("Quit CG-Agent-MacOS-Avatar"), sel!(quit:));
         unsafe {
             talk.setTarget(Some(self.as_ref()));
             harness.setTarget(Some(self.as_ref()));
             ollama.setTarget(Some(self.as_ref()));
             login.setTarget(Some(self.as_ref()));
+            reset.setTarget(Some(self.as_ref()));
             quit.setTarget(Some(self.as_ref()));
         }
         harness.setState(NSControlStateValueOff);
@@ -462,6 +474,7 @@ impl Delegate {
         menu.addItem(&harness);
         menu.addItem(&ollama);
         menu.addItem(&login);
+        menu.addItem(&reset);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&quit);
         item.setMenu(Some(&menu));
@@ -657,6 +670,35 @@ impl Delegate {
         }
         *self.ivars().shared.pending_login.lock().unwrap() = Some((username, password));
         *self.ivars().shared.last_reply.lock().unwrap() = "logging in…".into();
+        self.open_talk();
+    }
+
+    /// The harness permits an account flagged for bootstrap replacement to
+    /// change only its own password. Keep this rare flow as two native secure
+    /// prompts and hand the blocking request to the existing chat worker.
+    fn prompt_harness_password_reset(&self) {
+        let mtm = self.mtm();
+        let Some(current_password) =
+            Self::prompt_secure_text(mtm, "Harness Password Reset", "Current password")
+        else {
+            return;
+        };
+        let Some(password) = Self::prompt_secure_text(
+            mtm,
+            "Harness Password Reset",
+            "New password (at least 12 characters)",
+        ) else {
+            return;
+        };
+        if current_password.is_empty() || password.chars().count() < 12 {
+            *self.ivars().shared.last_reply.lock().unwrap() =
+                "new password needs at least 12 characters".into();
+            self.open_talk();
+            return;
+        }
+        *self.ivars().shared.pending_password_change.lock().unwrap() =
+            Some((current_password, password));
+        *self.ivars().shared.last_reply.lock().unwrap() = "changing password…".into();
         self.open_talk();
     }
 
@@ -1111,6 +1153,32 @@ fn spawn_workers(shared: Arc<Shared>) {
                 let ollama = Ollama::new().ok();
                 let mut session = None::<String>;
                 loop {
+                    let password_change = {
+                        shared
+                            .pending_password_change
+                            .lock()
+                            .unwrap()
+                            .take()
+                    };
+                    if let Some((current_password, password)) = password_change {
+                        match harness.as_mut() {
+                            Some(client) => match client.change_password(&current_password, &password) {
+                                Ok(()) => {
+                                    session = None;
+                                    *shared.last_reply.lock().unwrap() =
+                                        "password changed — ready to chat".into();
+                                }
+                                Err(e) => {
+                                    *shared.last_reply.lock().unwrap() =
+                                        format!("password reset failed: {e}");
+                                }
+                            },
+                            None => {
+                                *shared.last_reply.lock().unwrap() =
+                                    "log in to Harness before changing its password".into();
+                            }
+                        }
+                    }
                     let login = { shared.pending_login.lock().unwrap().take() };
                     if let Some((username, password)) = login {
                         let port = shared.port.load(Ordering::SeqCst);
@@ -1125,7 +1193,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             Some(client) => match client.login(&username, &password) {
                                 Ok(info) if info.must_change_password => {
                                     *shared.last_reply.lock().unwrap() =
-                                        "logged in — the bootstrap password must be changed in the harness console before chatting".into();
+                                        "logged in — use Harness Password Reset… before chatting".into();
                                 }
                                 Ok(info) => {
                                     session = None;
@@ -1203,7 +1271,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 }
                                 Err(ClientError::PasswordChangeRequired) => {
                                     *shared.last_reply.lock().unwrap() =
-                                        "bootstrap password must be changed — use the harness console".into();
+                                        "bootstrap password must be changed — use Harness Password Reset…".into();
                                 }
                                 Err(ClientError::CertMismatch) => {
                                     *shared.last_reply.lock().unwrap() =
@@ -1244,6 +1312,7 @@ pub fn run() {
         last_reply: Mutex::new(String::new()),
         pending: Mutex::new(None),
         pending_login: Mutex::new(None),
+        pending_password_change: Mutex::new(None),
         in_flight: AtomicBool::new(false),
         talking: AtomicBool::new(false),
         click: AtomicBool::new(false),

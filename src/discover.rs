@@ -152,6 +152,14 @@ fn probe_https_host(port: u16, pinned_cert: &[u8], host: &str) -> bool {
 /// loopback range answers as a harness at all, instead of silently handing
 /// back `preferred` as if it had been confirmed.
 pub fn resolve_reachable(preferred: u16, pinned_cert: Option<&[u8]>) -> Option<Reachable> {
+    resolve_reachable_from_candidates(preferred, pinned_cert, listen_ports_from_lsof)
+}
+
+fn resolve_reachable_from_candidates(
+    preferred: u16,
+    pinned_cert: Option<&[u8]>,
+    candidates: impl FnOnce() -> Vec<u16>,
+) -> Option<Reachable> {
     if let Some(cert) = pinned_cert {
         if probe_harness_https(preferred, cert) {
             return Some(Reachable::Https(preferred));
@@ -160,7 +168,7 @@ pub fn resolve_reachable(preferred: u16, pinned_cert: Option<&[u8]>) -> Option<R
     if probe_harness(preferred) {
         return Some(Reachable::Http(preferred));
     }
-    for port in listen_ports_from_lsof() {
+    for port in candidates() {
         if port == preferred {
             continue;
         }
@@ -239,10 +247,13 @@ mod tests {
 
     #[test]
     fn resolve_reachable_is_none_when_nothing_answers() {
-        // Port 1 is privileged/unbound in this sandbox and lsof is not
-        // present, so no candidates exist to probe either.
-        assert_eq!(resolve_reachable(1, None), None);
-        assert_eq!(resolve_reachable(1, Some(b"garbage")), None);
+        // Keep the no-candidate case independent of unrelated desktop
+        // Harness listeners on the developer's machine.
+        assert_eq!(resolve_reachable_from_candidates(1, None, Vec::new), None);
+        assert_eq!(
+            resolve_reachable_from_candidates(1, Some(b"garbage"), Vec::new),
+            None
+        );
     }
 
     #[test]
@@ -260,7 +271,9 @@ mod tests {
         // this exercises the fallback path landing on Http(port), proving
         // resolve_reachable does not simply trust https and give up.
         assert_eq!(
-            resolve_reachable(port, Some(b"garbage")),
+            resolve_reachable_from_candidates(port, Some(b"garbage"), || {
+                panic!("must not run lsof when the preferred port answers")
+            }),
             Some(Reachable::Http(port))
         );
     }

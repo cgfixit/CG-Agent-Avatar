@@ -38,7 +38,7 @@ pub enum ClientError {
     KeyRequired,
     #[error("harness login required")]
     LoginRequired,
-    #[error("bootstrap password must be changed — use the harness console")]
+    #[error("bootstrap password must be changed — use Harness Password Reset…")]
     PasswordChangeRequired,
     #[error("harness certificate did not match the pinned trust — possible rotation or MITM")]
     CertMismatch,
@@ -104,6 +104,12 @@ struct SessionPost<'a> {
 #[derive(Serialize)]
 struct LoginPost<'a> {
     username: &'a str,
+    password: &'a str,
+}
+
+#[derive(Serialize)]
+struct PasswordChangePost<'a> {
+    current_password: &'a str,
     password: &'a str,
 }
 
@@ -230,10 +236,9 @@ impl Client {
     /// Log in to a fresh (auth-enabled) harness home. Does not send a CSRF
     /// header — cg-agent-harness's `/api/auth/login` sits outside both its
     /// CSRF and session middleware (verified against its
-    /// src/server/routes/mod.rs router setup). On success, stores the
-    /// `csrf_token` the login response hands back directly, and the
-    /// session cookie is retained automatically by this client's cookie
-    /// jar for subsequent requests.
+    /// src/server/routes/mod.rs router setup). The response's CSRF token is
+    /// session-scoped, while ordinary guarded routes require the console's
+    /// process token, so the next mutation refreshes it from `GET /`.
     pub fn login(&mut self, username: &str, password: &str) -> Result<LoginInfo, ClientError> {
         let path = paths::POST_AUTH_LOGIN;
         if !paths::is_allowed_post(path) {
@@ -258,7 +263,8 @@ impl Client {
             .get("csrf_token")
             .and_then(|s| s.as_str())
             .ok_or(ClientError::Json)?;
-        self.csrf = Some(csrf::accept_token(raw_csrf).ok_or(ClientError::CsrfMissing)?);
+        csrf::accept_token(raw_csrf).ok_or(ClientError::CsrfMissing)?;
+        self.csrf = None;
         Ok(LoginInfo {
             username: v
                 .get("username")
@@ -275,6 +281,34 @@ impl Client {
                 .and_then(|b| b.as_bool())
                 .unwrap_or(false),
         })
+    }
+
+    /// Change only the current authenticated account's password. The harness
+    /// revokes old sessions and returns a replacement cookie, so clear the
+    /// console CSRF token and require a fresh one before the next mutation.
+    pub fn change_password(
+        &mut self,
+        current_password: &str,
+        password: &str,
+    ) -> Result<(), ClientError> {
+        let body = PasswordChangePost {
+            current_password,
+            password,
+        };
+        let resp = self.post_json(paths::POST_AUTH_PASSWORD, &body, GET_TIMEOUT)?;
+        if resp.status().as_u16() != 200 {
+            return Err(map_http(resp));
+        }
+        let v: Value = parse_json(resp)?;
+        if v.get("ok").and_then(|ok| ok.as_bool()) != Some(true)
+            || v.get("must_change_password")
+                .and_then(|required| required.as_bool())
+                != Some(false)
+        {
+            return Err(ClientError::Json);
+        }
+        self.csrf = None;
+        Ok(())
     }
 
     pub fn status(&self) -> Result<Status, ClientError> {
@@ -733,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn login_stores_csrf_from_body_no_pre_fetch() {
+    fn login_refreshes_console_csrf_before_guarded_routes() {
         let mut server = mockito::Server::new();
         // No GET / mock registered: login must not need to scrape HTML for CSRF.
         let login = server
@@ -746,7 +780,7 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_header("set-cookie", "cgagentharness_session=abc; HttpOnly; Path=/")
             .with_body(
-                r#"{"username":"admin","role":"admin","csrf_token":"tok12345","must_change_password":false}"#,
+                r#"{"username":"admin","role":"admin","csrf_token":"sessiontoken123","must_change_password":false}"#,
             )
             .create();
         let mut c = Client::new(origin_for(&server)).unwrap();
@@ -756,13 +790,14 @@ mod tests {
         assert!(!info.must_change_password);
         login.assert();
 
-        // ensure_session must reuse the csrf_token login already handed us,
-        // without hitting GET / again.
+        // Harness returns a session token here, but its guarded routes use
+        // the process token rendered in the console.
         let sessions = server
             .mock("GET", "/api/sessions")
             .with_header("content-type", "application/json")
             .with_body(r#"{"sessions":[]}"#)
             .create();
+        let console = server.mock("GET", "/").with_body(html_ok()).create();
         let create = server
             .mock("POST", "/api/sessions")
             .match_header("X-CyClaw-CSRF", "tok12345")
@@ -771,7 +806,33 @@ mod tests {
             .create();
         assert_eq!(c.ensure_session().unwrap(), "s1");
         sessions.assert();
+        console.assert();
         create.assert();
+    }
+
+    #[test]
+    fn password_change_uses_console_csrf_and_clears_it_after_rotation() {
+        let mut server = mockito::Server::new();
+        let console = server.mock("GET", "/").with_body(html_ok()).create();
+        let change = server
+            .mock("POST", "/api/auth/password")
+            .match_header("X-CyClaw-CSRF", "tok12345")
+            .match_body(mockito::Matcher::Regex(
+                r#""current_password":"admin","password":"new-password-123""#.into(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header(
+                "set-cookie",
+                "cgagentharness_session=replacement; HttpOnly; Path=/",
+            )
+            .with_body(r#"{"ok":true,"must_change_password":false}"#)
+            .create();
+        let mut c = Client::new(origin_for(&server)).unwrap();
+        c.change_password("admin", "new-password-123").unwrap();
+        assert!(c.csrf.is_none());
+        console.assert();
+        change.assert();
     }
 
     #[test]
