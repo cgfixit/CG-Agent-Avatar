@@ -86,11 +86,18 @@ layer that can hold it.
   port range, never touches the desktop focus socket, and skips Ollama's port
   (`OLLAMA_PORT`) and privileged ports.
 - **`ollama.rs`**: the Direct Ollama backend (the default).
-  - It talks only to `127.0.0.1:11434`, with its own allowlist of
-    `POST /v1/chat/completions` and `GET /api/tags`.
-  - The model tag is the constant `qwen3.8:27b-mlx`.
-  - Each request carries the bundled `resources/direct-ollama-system.md` as the
-    system message plus the current message only: no history, no tools.
+  - It talks only to `127.0.0.1:11434`, with its own allowlist:
+    `POST /v1/chat/completions`, `GET /api/tags`, and the daemon's
+    `POST /api/experimental/web_search` / `web_fetch`.
+  - The model tag is the constant `qwen3.8:27b-mlx`; `tags_ok` requires that
+    exact tag, and a chat 404 with the tag absent becomes `ModelMissing`.
+  - Each chat carries the bundled `resources/direct-ollama-system.md` as the
+    system message plus the current message: no history, no tools. When the
+    message starts with an explicit lookup phrase, it also carries one search or
+    page read, run through the local daemon and passed as untrusted text.
+- **`web_intent.rs`** (pure): decides whether a message is an explicit web
+  lookup ("search the web for …", "look up …", "google …", "read <link>") and
+  refuses private or credentialed links before any network call.
 - **`launch.rs`**: the one deliberate exception to "does not start the harness". It
   launches `CG Agent Harness.app` by bundle ID `com.cgfixit.agent-harness` via
   Launch Services. There is never a hardcoded path, a spawned process, or arguments.
@@ -140,7 +147,7 @@ process spawning, `Info.plist`, or CI.
 
 | File | Locks down |
 |---|---|
-| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only |
+| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only; web lookups only via the loopback daemon (no cloud host, key, or tools) |
 | `tests/objections.rs` | SSRF baits rejected, CSRF injection shapes, session IDs shaped like paths, oversized bodies, token redaction in `Debug` |
 | `tests/lsof_argv.rs` | argv-only loopback `lsof`; Ollama and privileged ports skipped |
 | `tests/plist_contract.rs` | bundle ID `com.cgfixit.cg-agent`, `LSUIElement` (no Dock), ATS local networking only |

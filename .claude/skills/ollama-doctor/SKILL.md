@@ -19,7 +19,8 @@ through a normal PR (`add-avatar-feature` / `check-security-invariants`).
 ## 1. Ground truth from source (read it; don't recall it)
 
 Read `src/ollama.rs` top to bottom and record:
-- `PORT`, `MODEL`, `POST_CHAT`, `GET_TAGS`, `ALLOWED`, and the three timeouts;
+- `PORT`, `MODEL`, `POST_CHAT`, `GET_TAGS`, `POST_WEB_SEARCH`, `POST_WEB_FETCH`,
+  `ALLOWED`, and the timeouts (including `WEB_TIMEOUT`);
 - `tags_ok`: exactly which model names it accepts (exact match? prefix?);
 - `chat_body`: the exact `model` it sends, `stream`, and the message array
   (system prompt + current message only, no history);
@@ -35,7 +36,7 @@ error becomes user-facing text, and check that `discover.rs` excludes `OLLAMA_PO
 |---|---|
 | The model tag is identical everywhere | `ollama.rs`, `app.rs` strings, `README.md`, `docs/CONTROLS.md`, `docs/BUILD.md`, `SECURITY.md`, `tests/source_contracts.rs` |
 | The readiness check agrees with what chat sends | If `tags_ok` accepts a tag that `chat_body` won't request, "ready" can still end in `ollama http 404` |
-| Only `/v1/chat/completions` + `/api/tags` are reachable; never `/api/generate`, `/api/chat`, or `/api/pull` | `ALLOWED`, `ollama_relay_is_loopback_openai_compat_only` |
+| Only `/v1/chat/completions`, `/api/tags`, and `/api/experimental/web_search`/`web_fetch` are reachable; never `/api/generate`, `/api/chat`, or `/api/pull` | `ALLOWED`, `ollama_relay_is_loopback_openai_compat_only`, `ollama_web_lookups_stay_on_the_loopback_daemon` |
 | No `tools`, `loop`, API key, proxy, or redirect-following | `chat_body` test `body_has_fixed_model_no_loop_no_tools`, the `.no_proxy()` and `redirect::Policy::none()` builder calls |
 | Every response is bounded by `MAX_BODY` | `response_bytes` → `http::read_bounded` |
 
@@ -48,8 +49,10 @@ cargo test --locked ollama
 ## 3. System prompt fitness
 
 `resources/direct-ollama-system.md` is compiled in with `include_str!` and sent as
-the only `system` message to a model that has **no tools and no history**. Read it
-and flag every instruction the model cannot follow in that setup:
+the only `system` message to a model that has **no tools and no history**. The only
+outside text it ever sees is a `<web_results>`/`<web_page>` block the app adds for
+an explicit lookup. Read the prompt and flag every instruction the model cannot
+follow in that setup:
 - reading or browsing files (`SOUL.md`, `STYLE.md`, `examples/`, `data/`);
 - writing or appending anything (such as a `MEMORY.md` log);
 - personas, vocabularies, or examples it points to that aren't actually included
@@ -82,7 +85,9 @@ them again before quoting, because they change.
 |---|---|---|
 | `ollama asleep` | Nothing listening on `127.0.0.1:11434`, a connect timeout (2s), or a service bound only to `localhost`/IPv6 | Live probe; `lsof -nP -iTCP:11434 -sTCP:LISTEN` on the Mac |
 | `ollama: ollama http 404` | Model tag not installed under the **exact** name `chat_body` sends, or an old Ollama without the `/v1` API | Live probe tag list compared with `MODEL`; the Ollama version |
-| `pull <model>` | The `OllamaError::ModelMissing` arm. Check whether any code path still constructs that variant; if nothing does, the hint is dead and a missing model shows up as the 404 above | `grep -n ModelMissing src/*.rs` |
+| `pull <model>` | Chat got a 404 and `/api/tags` confirms the exact tag is absent (`OllamaError::ModelMissing`) | Live probe tag list compared with `MODEL` |
+| `ollama: web lookup unavailable (http N)` | 404: Ollama older than 0.18.1. 401/403: not signed in (`ollama signin`) or cloud features disabled | `ollama --version`; the Ollama app's sign-in state |
+| `ollama: can't read that link…` | `web_intent` refused a private, `.local`, single-label, or credentialed link | Expected; only public http(s) pages |
 | Creature looks unwell but chat works | `tags_ok` returned `Ok(false)` (the status loop), or chat succeeded despite a tag the readiness rule rejects | Compare `tags_ok` matching with the live tag list |
 | `ollama: response too large` | Reply over 1 MiB (`MAX_BODY`) | Expected behavior; this is not a bug |
 | Replies ignore the persona or mention missing files | The system prompt asks for tool actions (§3) | Read the prompt |
