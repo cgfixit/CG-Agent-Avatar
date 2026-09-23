@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Shared rules for all agents live in `AGENTS.md`, which is imported here and is binding:
+
+@AGENTS.md
+
+Claude-specific wiring (`.claude/settings.json`, the web SessionStart hook, and the
+`add-avatar-feature` / `check-security-invariants` / `rust-optimize` skills) is described
+in AGENTS.md's "Claude Code" section.
+
 ## What this is
 
 `cg-agent` (CG-Agent-MacOS-Avatar) is a macOS menu-bar "creature" companion, written in Rust,
@@ -96,8 +104,8 @@ convention — several modules exist specifically to make unsafe behavior struct
 - TLS trust is pinned to a single certificate read from the harness's own home directory; the app
   never touches system/keychain trust and never disables certificate validation.
 - Credentials/session cookies are not persisted to disk.
-- `tests/source_contracts.rs`, `tests/ci_workflows.rs`, `tests/plist_contract.rs`, and
-  `tests/lsof_argv.rs` are contract tests that lock down source-level invariants (e.g. forbidden
+- `tests/source_contracts.rs`, `tests/ci_workflows.rs`, `tests/plist_contract.rs`,
+  `tests/lsof_argv.rs`, and `tests/objections.rs` are contract tests that lock down source-level invariants (e.g. forbidden
   paths staying unreferenced, CI workflow shape, Info.plist contents, argv-only `lsof` usage) —
   check these when touching networking, process-spawning, or CI config.
 
