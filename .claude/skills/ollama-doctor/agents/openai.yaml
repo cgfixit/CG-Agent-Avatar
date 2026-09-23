@@ -1,0 +1,4 @@
+# Codex: user-invoked only ($skill-name). Mirrors Claude Code's
+# `disable-model-invocation: true`, which Codex does not read.
+policy:
+  allow_implicit_invocation: false
