@@ -208,6 +208,26 @@ mod tests {
     }
 
     #[test]
+    fn system_prompt_asks_for_nothing_a_tool_free_model_cannot_do() {
+        // The request carries no tools, files, or history (see chat_body), so
+        // the prompt must not point the model at any of them.
+        for needle in [
+            "SOUL.md",
+            "STYLE.md",
+            "MEMORY.md",
+            "examples/",
+            "data/",
+            "name: soul",
+        ] {
+            assert!(
+                !SYSTEM_PROMPT.contains(needle),
+                "system prompt references {needle}"
+            );
+        }
+        assert!(SYSTEM_PROMPT.len() < 4096, "system prompt grew past 4 KiB");
+    }
+
+    #[test]
     fn refuses_non_allowlisted_path() {
         let o = LoopbackOrigin::from_port(PORT);
         assert!(o.url_on_allowlist("/api/generate", ALLOWED).is_err());
