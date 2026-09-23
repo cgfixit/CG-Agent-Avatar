@@ -122,3 +122,31 @@ fn pull_requests_test_the_release_toolchain_on_macos() {
     assert!(msrv.contains(&format!("toolchain: {toolchain}")));
     assert!(msrv.contains("cargo test --locked --all-targets"));
 }
+
+#[test]
+fn checkouts_never_persist_credentials() {
+    // No job pushes with the checkout's token, so none may leave it in .git/config
+    // while third-party actions and build scripts run.
+    for (name, yml) in [
+        ("ci.yml", include_str!("../.github/workflows/ci.yml")),
+        ("audit.yml", audit_yml()),
+        ("bundle.yml", bundle_yml()),
+        (
+            "gitleaks.yml",
+            include_str!("../.github/workflows/gitleaks.yml"),
+        ),
+    ] {
+        let steps: Vec<&str> = yml.split("- name:").collect();
+        let checkouts: Vec<&&str> = steps
+            .iter()
+            .filter(|step| step.contains("uses: actions/checkout@"))
+            .collect();
+        assert!(!checkouts.is_empty(), "{name}: no checkout step found");
+        for step in checkouts {
+            assert!(
+                step.contains("persist-credentials: false"),
+                "{name}: checkout without persist-credentials: false:\n{step}"
+            );
+        }
+    }
+}
