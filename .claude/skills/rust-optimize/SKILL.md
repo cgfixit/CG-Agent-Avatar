@@ -17,11 +17,13 @@ bar). Read the diff or module with that ordering in mind before suggesting anyth
 ```
 
 This runs `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-`cargo test --all-targets`, and `cargo deny check` (if installed) - the same gate CI
-runs. If it's not green before you start, fix that first: a before/after perf
-comparison against a broken baseline is meaningless. If `cargo clippy` resolves to an
-old rustup toolchain (1.85) instead of the pinned 1.88, use Homebrew's `cargo-clippy`
-binary instead, the same workaround `ci.sh` itself uses.
+`cargo test --all-targets` (all with `--locked`), and `cargo deny check` (if
+installed) - the same gate CI runs. If it's not green before you start, fix that
+first: a before/after perf comparison against a broken baseline is meaningless.
+`rust-toolchain.toml` pins Rust 1.88; if `cargo clippy` reports a different version,
+put rustup's binaries first on `PATH` so the pinned toolchain's Clippy is used (see
+`docs/BUILD.md`). On Linux (Claude Code on the web) `app.rs` is compiled out, so the
+gate there covers the portable modules only - say so when a change touches `app.rs`.
 
 ## 2. What actually matters in this codebase, in priority order
 
