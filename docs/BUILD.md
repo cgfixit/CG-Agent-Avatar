@@ -30,7 +30,9 @@ plutil -lint dist/CG-Agent-MacOS-Avatar.app/Contents/Info.plist
 ## Local checks and hosted CI
 
 `./scripts/ci.sh` runs formatting, Clippy with warnings denied, and all test
-targets. If `cargo-deny` is installed, it also checks dependency advisories,
+targets. On Linux, including Claude Code on the web and Codex cloud, the same
+script covers the portable modules and every contract test, but `src/app.rs` is
+compiled only on macOS. AppKit changes therefore need the macOS CI jobs. If `cargo-deny` is installed, it also checks dependency advisories,
 licenses, sources, and version policy; otherwise it prints an explicit skip.
 Install the audit tools separately from the app's Rust toolchain:
 
