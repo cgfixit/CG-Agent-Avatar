@@ -112,7 +112,9 @@ impl Ollama {
         Ok(models.iter().any(|m| {
             m.get("name")
                 .and_then(|n| n.as_str())
-                .is_some_and(|n| n == MODEL || n.starts_with("qwen3.8:27b"))
+                // Exact tag only: chat always requests MODEL, so a sibling
+                // quantization would pass here and then 404 on the first send.
+                .is_some_and(|n| n == MODEL)
         }))
     }
 
@@ -129,6 +131,12 @@ impl Ollama {
         let status = resp.status().as_u16();
         if (300..400).contains(&status) {
             return Err(OllamaError::Redirect);
+        }
+        // Ollama answers an unknown model with 404; so does a build without the
+        // OpenAI-compatible API. Only report ModelMissing when the tag list
+        // confirms the model is absent.
+        if status == 404 && matches!(self.tags_ok(), Ok(false)) {
+            return Err(OllamaError::ModelMissing);
         }
         if status != 200 {
             return Err(OllamaError::Http { status });
@@ -253,6 +261,64 @@ mod tests {
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(o.tags_ok().unwrap());
+    }
+
+    #[test]
+    fn tags_rejects_sibling_tag_chat_would_not_request() {
+        let mut server = mockito::Server::new();
+        let _m = server
+            .mock("GET", GET_TAGS)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"models":[{"name":"qwen3.8:27b-q4_K_M"},{"name":"qwen3.8:27b"}]}"#)
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(!o.tags_ok().unwrap());
+    }
+
+    #[test]
+    fn chat_404_with_model_absent_is_model_missing() {
+        let mut server = mockito::Server::new();
+        let _chat = server.mock("POST", POST_CHAT).with_status(404).create();
+        let tags = server
+            .mock("GET", GET_TAGS)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"models":[{"name":"qwen3.8:27b-q4_K_M"}]}"#)
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(o.chat("hi"), Err(OllamaError::ModelMissing)));
+        tags.assert();
+    }
+
+    #[test]
+    fn chat_404_with_model_listed_stays_http_404() {
+        // e.g. an Ollama build without /v1/chat/completions
+        let mut server = mockito::Server::new();
+        let _chat = server.mock("POST", POST_CHAT).with_status(404).create();
+        let _tags = server
+            .mock("GET", GET_TAGS)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"models":[{"name":"qwen3.8:27b-mlx"}]}"#)
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(
+            o.chat("hi"),
+            Err(OllamaError::Http { status: 404 })
+        ));
+    }
+
+    #[test]
+    fn chat_404_with_tags_unavailable_stays_http_404() {
+        let mut server = mockito::Server::new();
+        let _chat = server.mock("POST", POST_CHAT).with_status(404).create();
+        let _tags = server.mock("GET", GET_TAGS).with_status(500).create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(
+            o.chat("hi"),
+            Err(OllamaError::Http { status: 404 })
+        ));
     }
 
     #[test]
