@@ -52,8 +52,9 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 
 | Observation | Check |
 |---|---|
-| `ollama asleep` | Start the local service on `127.0.0.1:11434`; Avatar does not launch it. Confirm it serves the fixed model tag, not just an empty model list. |
-| `ollama http 404` or a model error | Confirm `/v1/chat/completions` is available and `qwen3.8:27b-mlx` is installed in that service. The model is not configurable in the menu. |
+| `ollama asleep` | Start the local service on `127.0.0.1:11434`; Avatar does not launch it. Confirm it lists the exact fixed model tag. |
+| `pull qwen3.8:27b-mlx` | The service is running, but its model list has no entry named exactly `qwen3.8:27b-mlx`. Other `qwen3.8:27b` variants don't count. Install that tag in the service; the model is not configurable in the menu. |
+| `ollama: ollama http 404` | The model is listed, but the chat request was rejected. Confirm that the service exposes the OpenAI-compatible `/v1/chat/completions` endpoint. |
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
 | Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |
