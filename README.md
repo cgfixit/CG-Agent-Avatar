@@ -145,8 +145,23 @@ path.
 See [SECURITY.md](SECURITY.md) for route allowlists, TLS trust, response limits,
 credential handling, and residual risks.
 
+## Contributing with coding agents
+
+[AGENTS.md](AGENTS.md) is the shared contract for human and agent contributors. It
+covers the architecture, hard security rules, contract tests, and the doc each
+fact belongs in. Claude Code reads it through [CLAUDE.md](CLAUDE.md), and Codex
+reads it directly. Repo skills in `.claude/skills/` (also exposed to Codex as
+`.agents/skills/`) include three manual commands:
+
+| Claude Code | Codex | Does |
+|---|---|---|
+| `/pr-opportunity-scan [focus]` | `$pr-opportunity-scan` | ~3-minute read-only scan that proposes 3-4 focused PRs |
+| `/ollama-doctor [symptom]` | `$ollama-doctor` | Direct Ollama model, prompt, and symptom diagnosis |
+| `/docs-sync [scope] [--check]` | `$docs-sync` | Rewrites stale docs to match the current source |
+
 ## Documentation
 
+- [Agent contributor guide](AGENTS.md)
 - [Build and verification](docs/BUILD.md)
 - [Controls, themes, and troubleshooting](docs/CONTROLS.md)
 - [Screenshot provenance and native verification](docs/screenshots/README.md)
