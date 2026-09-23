@@ -14,6 +14,7 @@ pub mod origin;
 pub mod paths;
 pub mod theme;
 pub mod validate;
+pub mod web_intent;
 
 #[cfg(target_os = "macos")]
 pub mod app;

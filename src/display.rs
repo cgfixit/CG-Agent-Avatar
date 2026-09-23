@@ -42,12 +42,12 @@ fn sanitized_text(raw: &str, max_chars: usize) -> String {
     out
 }
 
-/// Compact note appended when the harness's own web_search/web_fetch tools
-/// (see cg-agent-harness src/server/chat_web.rs) contributed to this reply.
-/// This app never calls those routes itself (`paths::FORBIDDEN`); it only
-/// displays what the harness already decided to fetch under its own
-/// allowlist. Plain text — whatever this returns still passes through
-/// `bubble_text` before display, same as the rest of the reply.
+/// Compact note appended when web lookups contributed to a reply: the
+/// harness's own web_search/web_fetch tools (see cg-agent-harness
+/// src/server/chat_web.rs), or a Direct Ollama lookup the user explicitly
+/// asked for (`web_intent`). This app never calls the harness web routes
+/// itself (`paths::FORBIDDEN`). Plain text — whatever this returns still
+/// passes through `bubble_text` before display, same as the rest of the reply.
 pub fn with_web_tools_note(reply: &str, tool_count: usize) -> String {
     if tool_count == 0 {
         return reply.to_string();

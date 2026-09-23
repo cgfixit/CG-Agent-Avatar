@@ -71,7 +71,9 @@ newest published version. Dependabot checks Cargo and Actions weekly.
 Direct Ollama is selected on launch. Avatar expects a local service on
 `http://127.0.0.1:11434` exposing `/api/tags` and `/v1/chat/completions`, with the
 fixed model tag `qwen3.8:27b-mlx`. Start that service separately; Avatar does not
-install models or start Ollama.
+install models or start Ollama. Optional
+[web lookups](../README.md#web-lookups-direct-ollama) also need Ollama 0.18.1 or
+newer, signed in with `ollama signin`.
 
 Selecting Harness in the menu launches or activates the installed
 `CG Agent Harness.app` through Launch Services. For a headless setup, start:
