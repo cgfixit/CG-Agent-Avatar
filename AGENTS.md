@@ -62,7 +62,7 @@ the change touches `app.rs`. Do not claim that macOS CI passed until it has.
 
 ## Git and PR conventions
 
-- Use conventional-ish commit subjects as seen in history (`perf:`, `ci:`, `docs:`, `fix:`, `feat:`).
+- Recent commits use a short type prefix (`perf:`, `ci:`, `docs:`); prefer that for new commits (older history is free-form).
 - Keep changes small, one concern per PR, and open PRs as drafts until CI is green.
 - Never commit `dist/`, `target/`, or a built `.app`.
 
