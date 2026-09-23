@@ -31,11 +31,9 @@ long, speculative one.
 ## Probes (verify each one; any of them may already be fixed)
 
 **Bugs / correctness**
-- Direct Ollama model matching: compare `ollama.rs::tags_ok` with the exact
-  `MODEL` that `chat_body` sends. A prefix match that says "ready" for a tag the
-  chat request won't use hides a 404 until the first send.
-- Dead error paths: enum variants that are matched but never constructed
-  (for example, check `OllamaError::ModelMissing` with `grep -n ModelMissing src/*.rs`).
+- Readiness vs request drift: `ollama.rs::tags_ok` must keep matching the exact
+  `MODEL` that `chat_body` sends (a prefix match hides a 404 until first send).
+- Dead error paths: enum variants that are matched but never constructed.
 - Error mapping that loses meaning, e.g. an I/O read error surfaced as `Json`
   (`response_bytes` in `ollama.rs`, and the same pattern in `client.rs`).
 - `unwrap()`/`expect()` outside `#[cfg(test)]` on data that comes from the network,
@@ -44,8 +42,9 @@ long, speculative one.
 **Direct Ollama understanding**
 - `resources/direct-ollama-system.md` is sent verbatim as the system prompt to a
   **tool-free** model. Flag any instruction the model cannot follow without tools
-  (reading files, appending to a memory log, browsing `data/`). Also flag any
-  persona it points to that isn't actually present in the prompt.
+  (reading files, appending to a memory log). Web text only arrives through the
+  explicit-lookup block, so also check `web_intent.rs` for phrases that trigger a
+  lookup by accident (false positives send text off the machine).
 - The model tag must be identical in `ollama.rs`, the `app.rs` menu/status strings,
   `README.md`, `docs/CONTROLS.md`, `docs/BUILD.md`, `SECURITY.md`, and the
   `ollama_relay_is_loopback_openai_compat_only` contract test.
