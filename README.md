@@ -38,12 +38,32 @@ are also ad-hoc signed, not notarized; macOS may require **Open Anyway**.
 
 | Backend | Setup and behavior |
 |---|---|
-| **Direct Ollama (default)** | Start a local service on `http://127.0.0.1:11434` that exposes `/api/tags` and `/v1/chat/completions` and serves `qwen3.8:27b-mlx`. Avatar sends the bundled [Soul prompt](resources/direct-ollama-system.md) and the current message. It does not start Ollama, install a model, or send previous turns. |
+| **Direct Ollama (default)** | Start a local service on `http://127.0.0.1:11434` that exposes `/api/tags` and `/v1/chat/completions` and serves `qwen3.8:27b-mlx`. Avatar sends the bundled [Soul prompt](resources/direct-ollama-system.md) and the current message. It does not start Ollama, install a model, or send previous turns. Optional [web lookups](#web-lookups-direct-ollama) run only when you ask for one. |
 | **Harness** | Select **Harness (127.0.0.1:8790)** in the menu. Avatar launches or activates the installed Harness desktop app, then discovers its listener. A headless `cgagentharness serve` instance also works. TLS and account setup are described below. |
 
 The Ollama model tag is fixed in this version. A responding local service alone
 does not guarantee that it can serve that model. Harness manages its own model
 and conversation session; Avatar reuses a session titled `CG-Agent`, or creates one when none has that title.
+
+### Web lookups (Direct Ollama)
+
+To use the web, ask in plain words:
+
+- "search the web for best pizza in Atlanta", "look up …", or "google …"
+- "read https://…", or "summarize https://…"
+
+Avatar then asks the local Ollama service to run that one search (up to five
+results) or to read that one page. It passes the text to the model as untrusted
+reference material, and the reply ends with `[via web ×1]`. Any other message
+stays a local chat. Starting a message with just `search …` does not trigger a
+lookup. The full phrase list is in [Controls](docs/CONTROLS.md#web-lookups-direct-ollama).
+
+Lookups need Ollama 0.18.1 or newer, signed in with `ollama signin`, with its
+cloud features enabled. Ollama runs the lookup through its cloud service under
+your Ollama account, so the query or link leaves your Mac. Avatar itself still
+connects only to `127.0.0.1` and holds no API key. Links to private hosts are
+refused: `localhost`, private or link-local IPs, `.local` names, single-word
+hosts, and links with embedded passwords.
 
 ## Talk and read replies
 
@@ -111,8 +131,11 @@ path.
 
 - Avatar connects only to literal IPv4/IPv6 loopback addresses (`127.0.0.1` and
   `::1`); it rejects `localhost` names and HTTP redirects.
-- Direct Ollama requests contain the system prompt and current message, with no
-  tool definitions, API keys, web-search calls, or agent jobs.
+- Direct Ollama chat requests contain the system prompt and the current message,
+  with no tool definitions, API keys, or agent jobs. When you explicitly ask for
+  a web lookup, the message also carries that one lookup's results. The lookup
+  goes through the local Ollama service's experimental web routes; Avatar never
+  contacts a web host itself.
 - Harness chat may use capabilities configured in Harness itself. Avatar only
   displays a `[via web ×N]` note when the reply reports web-tool use; it never
   fetches those pages. A local Avatar connection does not imply that the

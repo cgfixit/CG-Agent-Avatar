@@ -92,3 +92,33 @@ fn ollama_relay_is_loopback_openai_compat_only() {
     assert_eq!(v["model"], "qwen3.8:27b-mlx");
     assert!(v.get("loop").is_none());
 }
+
+#[test]
+fn ollama_web_lookups_stay_on_the_loopback_daemon() {
+    let src = include_str!("../src/ollama.rs");
+    let prod = src.split("#[cfg(test)]").next().expect("prod");
+    // Web access exists only as the local daemon's experimental routes, which
+    // the daemon signs with its own `ollama signin` identity.
+    assert!(prod.contains("\"/api/experimental/web_search\""));
+    assert!(prod.contains("\"/api/experimental/web_fetch\""));
+    // The app never talks to Ollama's cloud directly, carries no key, and
+    // never offers the model tools.
+    for banned in [
+        "ollama.com",
+        "OLLAMA_API_KEY",
+        "Authorization",
+        "Bearer",
+        "\"tools\"",
+        "tool_choice",
+    ] {
+        assert!(!prod.contains(banned), "ollama.rs mentions {banned}");
+    }
+    // Plain chat is still exactly the Soul prompt plus the user's message.
+    let v = cg_agent::ollama::chat_body_json("hi");
+    assert_eq!(v["messages"].as_array().map(Vec::len), Some(2));
+    assert!(v.get("tools").is_none());
+    // Lookups happen only on an explicit request.
+    use cg_agent::web_intent::{parse, Intent};
+    assert_eq!(parse("what happened in the news today?"), Intent::Chat);
+    assert_eq!(parse("tell me about ollama.com"), Intent::Chat);
+}
