@@ -3,7 +3,7 @@ name: docs-sync
 description: Bring every doc in this repo (README.md, SECURITY.md, docs/BUILD.md, docs/CONTROLS.md, AGENTS.md, CLAUDE.md, and the .claude/skills playbooks) back in line with the current source, workflows, and toolchain. It rewrites stale statements in place instead of appending changelog-style notes. Manual only; run it after a feature/CI change or before a release.
 disable-model-invocation: true
 argument-hint: "[scope: all | readme | security | build | controls | agents | skills] [--check]"
-allowed-tools: Read Grep Glob Bash(git log:*) Bash(git diff:*) Bash(git show:*) Bash(git ls-files:*) Bash(cargo test --locked:*)
+allowed-tools: Read, Grep, Glob, Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git ls-files:*), Bash(cargo test --locked:*)
 ---
 
 # Docs sync
