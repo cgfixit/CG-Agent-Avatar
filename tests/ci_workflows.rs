@@ -150,3 +150,55 @@ fn checkouts_never_persist_credentials() {
         }
     }
 }
+
+fn all_workflows() -> [(&'static str, &'static str); 4] {
+    [
+        ("ci.yml", include_str!("../.github/workflows/ci.yml")),
+        ("audit.yml", audit_yml()),
+        ("bundle.yml", bundle_yml()),
+        (
+            "gitleaks.yml",
+            include_str!("../.github/workflows/gitleaks.yml"),
+        ),
+    ]
+}
+
+#[test]
+fn stable_leg_really_runs_stable() {
+    // rust-toolchain.toml outranks rustup's default toolchain, so installing
+    // stable is not enough: without this override the matrix builds with 1.88.
+    let ci = include_str!("../.github/workflows/ci.yml");
+    let test_job = ci.split("  msrv:").next().unwrap();
+    assert!(test_job.contains("toolchain: stable"));
+    assert!(test_job.contains("RUSTUP_TOOLCHAIN: stable"));
+}
+
+#[test]
+fn every_job_has_a_timeout() {
+    for (name, yml) in all_workflows() {
+        assert_eq!(
+            yml.matches("runs-on:").count(),
+            yml.matches("timeout-minutes:").count(),
+            "{name}: every job needs timeout-minutes"
+        );
+    }
+}
+
+#[test]
+fn caches_are_written_only_from_main() {
+    for (name, yml) in all_workflows() {
+        for step in yml
+            .split("- name:")
+            .filter(|step| step.contains("Swatinem/rust-cache@"))
+        {
+            assert!(
+                step.contains("save-if: ${{ github.ref == 'refs/heads/main' }}"),
+                "{name}: cache step may be written by PR runs:\n{step}"
+            );
+        }
+    }
+    assert!(
+        !bundle_yml().contains("rust-cache"),
+        "release builds stay uncached"
+    );
+}
