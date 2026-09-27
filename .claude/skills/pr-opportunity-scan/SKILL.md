@@ -3,7 +3,7 @@ name: pr-opportunity-scan
 description: Time-boxed (~3 minute), strictly read-only scan of this repo that ends with 3-4 focused, independently mergeable PR proposals - bug fixes, dependency drift, CI hardening, contract-test gaps, Direct Ollama misconfigurations, performance, or security hardening. Manual only; run it when you want a prioritized "what should the next few PRs be" plan, not an edit.
 disable-model-invocation: true
 argument-hint: "[focus area, e.g. ci | ollama | security | perf | tests | deps]"
-allowed-tools: Read Grep Glob Bash(git log:*) Bash(git diff:*) Bash(git show:*) Bash(git ls-files:*) Bash(git status:*) Bash(cargo tree:*) Bash(cargo metadata:*) Bash(wc:*)
+allowed-tools: Read, Grep, Glob, Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git ls-files:*), Bash(git status:*), Bash(cargo tree:*), Bash(cargo metadata:*), Bash(wc:*)
 ---
 
 # PR opportunity scan

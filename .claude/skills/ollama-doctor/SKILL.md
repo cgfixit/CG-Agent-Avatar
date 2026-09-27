@@ -3,7 +3,7 @@ name: ollama-doctor
 description: Diagnose the Direct Ollama backend end to end - the fixed model tag, the /api/tags readiness check versus what chat actually requests, the bundled Soul system prompt versus a tool-free model, loopback/port rules, and (on a Mac with Ollama running) a live loopback probe - and explain "ollama asleep", "ollama http 404", or "pull <model>" symptoms. Manual only; diagnoses and reports, never edits.
 disable-model-invocation: true
 argument-hint: "[symptom, e.g. \"ollama http 404\" | \"replies ignore persona\" | audit]"
-allowed-tools: Read Grep Glob Bash(git log:*) Bash(cargo test --locked ollama:*) Bash(curl -sS --max-time 5 http://127.0.0.1:11434/api/tags) Bash(uname:*)
+allowed-tools: Read, Grep, Glob, Bash(git log:*), Bash(cargo test --locked ollama:*), Bash(curl -sS --max-time 5 http://127.0.0.1:11434/api/tags), Bash(uname:*)
 ---
 
 # Ollama doctor
