@@ -32,6 +32,9 @@ fn sanitized_text(raw: &str, max_chars: usize) -> String {
         if c.is_control() && c != '\n' && c != '\t' {
             continue;
         }
+        if is_bidi_control(c) {
+            continue;
+        }
         out.push(c);
         chars += 1;
         if chars >= max_chars {
@@ -40,6 +43,16 @@ fn sanitized_text(raw: &str, max_chars: usize) -> String {
         }
     }
     out
+}
+
+/// Bidirectional embeddings, overrides, isolates and marks can make text
+/// display in a different order than it reads (CVE-2021-42574, "Trojan
+/// Source"). They are format characters, so `is_control` keeps them.
+fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 /// Compact note appended when web lookups contributed to a reply: the
@@ -87,6 +100,16 @@ mod tests {
         let out = bubble_text(&raw);
         assert!(out.chars().count() <= MAX_BUBBLE_CHARS + 1);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn drops_bidi_overrides_but_keeps_emoji_joiners() {
+        assert_eq!(
+            bubble_text("pay \u{202E}lmth.exe\u{202C} now \u{2066}x\u{2069}"),
+            "pay lmth.exe now x"
+        );
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_eq!(bubble_text(family), family);
     }
 
     #[test]
