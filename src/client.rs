@@ -355,7 +355,11 @@ impl Client {
                 code: "STATUS".into(),
             });
         }
-        parse_json(resp)
+        let value: Value = parse_json(resp)?;
+        if !crate::discover::looks_like_harness(&value) {
+            return Err(ClientError::Json);
+        }
+        serde_json::from_value(value).map_err(|_| ClientError::Json)
     }
 
     pub fn refresh_csrf(&mut self) -> Result<(), ClientError> {
@@ -951,6 +955,18 @@ mod tests {
     }
 
     #[test]
+    fn status_rejects_generic_json_even_over_a_valid_connection() {
+        let mut server = mockito::Server::new();
+        let _m = server
+            .mock("GET", "/api/status")
+            .with_status(200)
+            .with_body(r#"{"message":"ok","auth_enabled":true}"#)
+            .create();
+        let c = Client::new(origin_for(&server)).unwrap();
+        assert!(matches!(c.status(), Err(ClientError::Json)));
+    }
+
+    #[test]
     fn chat_reply_carries_web_tools() {
         let mut server = mockito::Server::new();
         let _html = server.mock("GET", "/").with_body(html_ok()).create();
@@ -1090,7 +1106,7 @@ mod tests {
         let other = server
             .mock("GET", "/api/status")
             .match_header("cookie", mockito::Matcher::Missing)
-            .with_body(r#"{"version":"1","auth_enabled":true,"api_key_optional":true}"#)
+            .with_body(r#"{"version":"1","auth_enabled":true,"status":"login required for operational details"}"#)
             .create();
         assert!(Client::new(origin_for(&server))
             .unwrap()

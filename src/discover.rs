@@ -35,11 +35,17 @@ pub fn looks_like_harness(v: &Value) -> bool {
     // src/server/routes/core.rs: status()). That is still unambiguously the
     // harness, not "nothing here" — the account just hasn't logged in yet.
     if v.get("auth_enabled").and_then(Value::as_bool) == Some(true) && v.get("model").is_none() {
-        return true;
+        return v.get("version").and_then(Value::as_str).is_some()
+            && v.get("status").and_then(Value::as_str)
+                == Some("login required for operational details");
     }
-    let model = v.get("model").and_then(Value::as_str).unwrap_or("");
-    if model.is_empty() {
+    let Some(model) = v.get("model").and_then(Value::as_str) else {
         return false;
+    };
+    if model.is_empty() {
+        return v.get("version").and_then(Value::as_str).is_some()
+            && v.get("provider").and_then(Value::as_str).is_some()
+            && v.get("api_key_optional").and_then(Value::as_bool).is_some();
     }
     v.get("api_key_optional").and_then(Value::as_bool).is_some()
 }
@@ -248,6 +254,20 @@ mod tests {
         assert!(!looks_like_harness(
             &json!({"auth_enabled": false, "model": ""})
         ));
+        assert!(!looks_like_harness(&json!({"auth_enabled": true})));
+        assert!(!looks_like_harness(&json!({
+            "version": "1.2.3", "auth_enabled": true, "status": "ok"
+        })));
+    }
+
+    #[test]
+    fn recognizes_full_status_with_no_model_as_configuration_needed() {
+        assert!(looks_like_harness(&json!({
+            "version": "1.2.3", "model": "", "provider": "", "api_key_optional": false
+        })));
+        assert!(!looks_like_harness(&json!({
+            "model": "", "provider": "", "api_key_optional": false
+        })));
     }
 
     #[test]

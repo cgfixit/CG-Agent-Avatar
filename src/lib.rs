@@ -5,6 +5,7 @@ pub mod client;
 pub mod csrf;
 pub mod discover;
 pub mod display;
+pub mod harness_setup;
 pub mod home;
 mod http;
 pub mod launch;

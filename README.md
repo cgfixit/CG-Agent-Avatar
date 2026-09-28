@@ -98,13 +98,20 @@ and Harness pointed at the same home. Legacy HTTP homes remain supported.
 
 For an account-gated home:
 
-1. Select **Harness (127.0.0.1:8790)**. Login by itself does not change the backend.
-2. Choose **Harness Login…**, enter the account configured in Harness, and wait
-   for the result in the bubble.
+1. Select **Harness (127.0.0.1:8790)**. Avatar opens the installed Harness app
+   and waits for a confirmed loopback status response. The bubble then guides
+   the next step. Login by itself does not change the backend.
+2. When the bubble asks you to log in, choose **Harness Login…** and enter the
+   account configured in Harness. Wait for the result in the bubble.
 3. If Harness requires a bootstrap password replacement, choose **Harness
    Password Reset…**. Enter the current password and a new password of at least
    12 characters. **OK** in the new-password prompt submits the change;
-   **Cancel** leaves it unchanged. Wait for `password changed — ready to chat`.
+   **Cancel** leaves it unchanged. Avatar checks Harness status again after the
+   change and enables chat only when the model, provider, and key are usable.
+
+If the bubble asks you to configure a model, provider, or key, do that in
+Harness and wait for Avatar's next status check. Text typed before Harness is
+ready stays in the field when you press Return.
 
 Password Reset changes only the authenticated account and requires its current
 password; it is not forgotten-password recovery. Credentials and cookies stay
