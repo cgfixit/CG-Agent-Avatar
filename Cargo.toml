@@ -2,6 +2,7 @@
 name = "cg-agent"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 license = "MIT"
 description = "Menu-bar creature companion for a running CG-Agent-Harness"
 publish = false

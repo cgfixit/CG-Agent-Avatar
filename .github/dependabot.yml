@@ -4,7 +4,20 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Let fresh releases age before they reach a PR (yanks, compromised publishes).
+    cooldown:
+      default-days: 7
+    groups:
+      objc2:
+        patterns: ["objc2*"]
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      artifact-actions:
+        patterns: ["actions/upload-artifact", "actions/download-artifact"]
