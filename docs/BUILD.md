@@ -66,7 +66,9 @@ Cargo Deny's advisory fetch is a separate operation; `cargo deny --offline
 All dependency-resolving build/test commands use `--locked`. Review intentional
 updates to `Cargo.toml` and `Cargo.lock` together, then rerun checks; a passing
 locked build verifies the committed resolution, not that every crate is the
-newest published version. Dependabot checks Cargo and Actions weekly.
+newest published version. Run `cargo update --dry-run` to check whether newer
+compatible versions would change the lockfile without editing it. Dependabot
+checks Cargo and Actions weekly.
 
 ## Backend setup
 
