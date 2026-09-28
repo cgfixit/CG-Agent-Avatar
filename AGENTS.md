@@ -157,7 +157,7 @@ process spawning, `Info.plist`, or CI.
 | `tests/objections.rs` | SSRF baits rejected, CSRF injection shapes, session IDs shaped like paths, oversized bodies, token redaction in `Debug` |
 | `tests/lsof_argv.rs` | argv-only loopback `lsof`; Ollama and privileged ports skipped |
 | `tests/plist_contract.rs` | bundle ID `com.cgfixit.cg-agent`, `LSUIElement` (no Dock), ATS local networking only |
-| `tests/ci_workflows.rs` | pinned cargo-audit; no `pull_request_target`; bundle schedule and dispatch; lockfile drift rejected; release toolchain tested on macOS |
+| `tests/ci_workflows.rs` | every action pinned to a full commit SHA; `contents: read` tokens everywhere but the release job; no `pull_request_target`; pinned cargo-audit; bundle schedule and dispatch; lockfile drift rejected; release toolchain tested on macOS |
 
 ## Doc map (one owner per fact)
 
