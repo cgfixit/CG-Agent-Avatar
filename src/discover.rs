@@ -71,7 +71,11 @@ pub fn parse_lsof_fields(text: &str) -> Vec<u16> {
         if line.is_empty() {
             continue;
         }
-        let (tag, rest) = line.split_at(1);
+        // Field lines start with an ASCII tag; anything else is skipped
+        // rather than split mid-character.
+        let (Some(tag), Some(rest)) = (line.get(..1), line.get(1..)) else {
+            continue;
+        };
         match tag {
             "p" => cmd.clear(),
             "c" => cmd = rest.to_string(),
@@ -197,7 +201,8 @@ fn lsof_stdout() -> Option<String> {
             continue;
         };
         if !out.stdout.is_empty() {
-            return String::from_utf8(out.stdout).ok();
+            // One process with a non-UTF-8 name must not hide every listener.
+            return Some(String::from_utf8_lossy(&out.stdout).into_owned());
         }
     }
     None
@@ -302,6 +307,12 @@ p225
 ccgagentharness
 n10.0.0.5:51235
 ";
+        assert_eq!(parse_lsof_fields(text), vec![51234]);
+    }
+
+    #[test]
+    fn parse_lsof_survives_non_ascii_line_starts() {
+        let text = "é garbage\np1\nccgagentharness\nn127.0.0.1:51234\n";
         assert_eq!(parse_lsof_fields(text), vec![51234]);
     }
 

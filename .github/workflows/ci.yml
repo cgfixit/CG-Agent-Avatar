@@ -19,6 +19,11 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      # rust-toolchain.toml pins 1.88 and outranks the rustup default set
+      # below, so without this the "stable" leg silently builds with 1.88.
+      RUSTUP_TOOLCHAIN: stable
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +39,14 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: stable-${{ runner.os }}
+          # Only main writes the cache: PR runs restore main's entry instead of
+          # each branch saving its own and evicting the others (10 GB repo cap).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: fmt
         run: cargo fmt --all -- --check
@@ -53,6 +66,7 @@ jobs:
   msrv:
     name: Rust 1.88 (macOS)
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,12 +78,21 @@ jobs:
         with:
           toolchain: 1.88
 
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: msrv-${{ runner.os }}
+          # Only main writes the cache: PR runs restore main's entry instead of
+          # each branch saving its own and evicting the others (10 GB repo cap).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Test the packaged app's Rust version, including AppKit
         run: cargo test --locked --all-targets
 
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
