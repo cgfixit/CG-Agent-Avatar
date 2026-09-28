@@ -12,6 +12,11 @@ updates:
         patterns: ["objc2*"]
       cargo-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # 0.13 changes the TLS root-store API and crypto provider; it is a reviewed
+      # migration (docs/BUILD.md), not an automatic bump.
+      - dependency-name: reqwest
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
