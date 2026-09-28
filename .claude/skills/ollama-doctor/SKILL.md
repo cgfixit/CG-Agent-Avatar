@@ -84,9 +84,10 @@ them again before quoting, because they change.
 | What the user sees | Most likely cause | Confirm by |
 |---|---|---|
 | `ollama asleep` | Nothing listening on `127.0.0.1:11434`, a connect timeout (2s), or a service bound only to `localhost`/IPv6 | Live probe; `lsof -nP -iTCP:11434 -sTCP:LISTEN` on the Mac |
-| `ollama: ollama http 404` | Model tag not installed under the **exact** name `chat_body` sends, or an old Ollama without the `/v1` API | Live probe tag list compared with `MODEL`; the Ollama version |
+| `ollama: ollama http N: <reason>` | The daemon's own reason, clipped to one line. A 404 `…not found, try pulling it first` with the tag listed means missing model files (re-pull); 503 is a full queue; a 500 about the MLX runner is usually a failed load (memory) | Live probe tag list compared with `MODEL`; the Ollama app's log |
+| `ollama: ollama took too long to answer…` | The 720 s `CHAT_TIMEOUT` expired, typically a cold load plus a long answer | Retry after the model is loaded; `ollama ps` |
 | `pull <model>` | Chat got a 404 and `/api/tags` confirms the exact tag is absent (`OllamaError::ModelMissing`) | Live probe tag list compared with `MODEL` |
-| `ollama: web lookup unavailable (http N)` | 404: Ollama older than 0.18.1. 401/403: not signed in (`ollama signin`) or cloud features disabled | `ollama --version`; the Ollama app's sign-in state |
+| `ollama: web lookup unavailable (http N): <hint>` | 404: Ollama without the web routes. 401: not signed in (`ollama signin`). 403: cloud features disabled. 429: upstream rate limit. 5xx: the daemon couldn't reach ollama.com | `ollama --version`; the Ollama app's sign-in and cloud settings |
 | `ollama: can't read that link…` | `web_intent` refused a private, `.local`, single-label, or credentialed link | Expected; only public http(s) pages |
 | Creature looks unwell but chat works | `tags_ok` returned `Ok(false)` (the status loop), or chat succeeded despite a tag the readiness rule rejects | Compare `tags_ok` matching with the live tag list |
 | `ollama: response too large` | Reply over 1 MiB (`MAX_BODY`) | Expected behavior; this is not a bug |
