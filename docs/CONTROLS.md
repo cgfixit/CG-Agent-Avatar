@@ -24,7 +24,9 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
 Direct Ollama sends only the current message plus the bundled system prompt,
-and the results of one lookup when you ask for one. Harness uses a server-side session. The input accepts up to 32,768 characters
+and the results of one lookup when you ask for one. It asks for a direct answer
+with no hidden reasoning pass (`reasoning_effort: "none"`) and Qwen's published
+non-thinking sampling, so replies arrive sooner. Harness uses a server-side session. The input accepts up to 32,768 characters
 after trimming, rejects NUL characters, and leaves invalid input unsent.
 This is a character limit, not a token-context setting.
 
@@ -74,9 +76,13 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 |---|---|
 | `ollama asleep` | Start the local service on `127.0.0.1:11434`; Avatar does not launch it. Confirm it lists the exact fixed model tag. |
 | `pull qwen3.8:27b-mlx` | The service is running, but its model list has no entry named exactly `qwen3.8:27b-mlx`. Other `qwen3.8:27b` variants don't count. Install that tag in the service; the model is not configurable in the menu. |
-| `ollama: ollama http 404` | The model is listed, but the chat request was rejected. Confirm that the service exposes the OpenAI-compatible `/v1/chat/completions` endpoint. |
-| `ollama: web lookup unavailable (http 404)…` | This Ollama predates the web routes. Update to 0.18.1 or newer. |
-| `ollama: web lookup unavailable (http 401)…` or `(http 403)…` | Run `ollama signin`, and make sure Ollama's cloud features aren't disabled. |
+| `ollama: ollama took too long to answer…` | The service accepted the request but didn't finish within 12 minutes, often a first load of the ~18 GB model on a busy Mac. Try again once it has loaded. |
+| `ollama: ollama http N: <reason>` | The service rejected the turn and gave its reason. `…not found, try pulling it first` means the tag is listed but its files are missing: pull it again. `server busy` (503) means its queue is full. A 500 about the MLX runner usually means the model couldn't load (memory). |
+| `ollama: ollama returned an empty reply` | The model answered with no text. Send the message again. |
+| `ollama: web lookup unavailable (http 404)…` | This Ollama predates the web routes. Update Ollama. |
+| `ollama: web lookup unavailable (http 401)…` | Run `ollama signin`. |
+| `ollama: web lookup unavailable (http 403)…` | Ollama's cloud features are turned off (`OLLAMA_NO_CLOUD` or its settings). Turn them on to allow lookups. |
+| `ollama: web lookup unavailable (http 429)…` or `(http 5xx)…` | Ollama's web service is rate limiting, or Ollama couldn't reach it. Check the connection and try again later. |
 | `ollama: can't read that link…` | Only public `http(s)` pages can be read. Refused: `localhost`, private or link-local IPs, `.local` names, single-word hosts, and links with embedded passwords. |
 | A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama). Plain questions stay local. |
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |

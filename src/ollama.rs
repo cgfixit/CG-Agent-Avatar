@@ -32,6 +32,18 @@ const GET_TIMEOUT: Duration = Duration::from_secs(8);
 const CHAT_TIMEOUT: Duration = Duration::from_secs(720);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const WEB_TIMEOUT: Duration = Duration::from_secs(30);
+/// Qwen3.8's published non-thinking settings. Ollama's OpenAI-compatible
+/// route forces temperature and top_p to 1.0 when a request omits them,
+/// overriding the model's own defaults, so they are always sent.
+const TEMPERATURE: f32 = 0.7;
+const TOP_P: f32 = 0.8;
+const PRESENCE_PENALTY: f32 = 1.5;
+/// Ollama defaults qwen3.8 to "medium" reasoning. The reasoning text comes
+/// back in a separate field this non-streaming bubble never shows, so it
+/// would only add wait time; "none" asks for the answer directly.
+const REASONING_EFFORT: &str = "none";
+/// Most characters of a daemon error message carried into the bubble.
+const DETAIL_CHARS: usize = 160;
 /// Results requested per search, and the most characters of each result or
 /// page the model sees, so a lookup can't crowd out the conversation.
 const SEARCH_RESULTS: usize = 5;
@@ -47,8 +59,10 @@ pub enum OllamaError {
     Validate(#[from] ValidateError),
     #[error("ollama asleep")]
     Unreachable,
-    #[error("ollama http {status}")]
-    Http { status: u16 },
+    #[error("ollama took too long to answer; a cold model load can take minutes, so try again")]
+    Timeout,
+    #[error("ollama http {status}{detail}")]
+    Http { status: u16, detail: String },
     #[error("unexpected json")]
     Json,
     #[error("response too large")]
@@ -57,10 +71,10 @@ pub enum OllamaError {
     Redirect,
     #[error("model {MODEL} not listed")]
     ModelMissing,
-    #[error(
-        "web lookup unavailable (http {status}): needs Ollama 0.18.1+ with `ollama signin` and cloud features on"
-    )]
+    #[error("web lookup unavailable (http {status}): {}", web_hint(*status))]
     WebUnavailable { status: u16 },
+    #[error("ollama returned an empty reply")]
+    EmptyReply,
     #[error("can't read that link: only public http(s) pages")]
     LinkRefused,
 }
@@ -76,6 +90,10 @@ struct ChatBody<'a> {
     model: &'static str,
     messages: [ChatMessage<'a>; 2],
     stream: bool,
+    reasoning_effort: &'static str,
+    temperature: f32,
+    top_p: f32,
+    presence_penalty: f32,
 }
 
 #[derive(Serialize)]
@@ -91,7 +109,9 @@ struct FetchRequest<'a> {
 
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
-    results: Vec<WebResult>,
+    /// Tolerates an absent or `null` list for zero hits.
+    #[serde(default)]
+    results: Option<Vec<WebResult>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,13 +169,13 @@ impl Ollama {
             .get(self.url(GET_TAGS)?)
             .timeout(GET_TIMEOUT)
             .send()
-            .map_err(|_| OllamaError::Unreachable)?;
+            .map_err(|e| send_error(&e))?;
         let status = resp.status().as_u16();
         if (300..400).contains(&status) {
             return Err(OllamaError::Redirect);
         }
         if status != 200 {
-            return Err(OllamaError::Http { status });
+            return Err(http_error(status, resp));
         }
         if let Some(len) = resp.content_length() {
             if len > MAX_BODY {
@@ -199,7 +219,7 @@ impl Ollama {
         };
         let bytes = self.post_web(POST_WEB_SEARCH, &body)?;
         let resp: SearchResponse = serde_json::from_slice(&bytes).map_err(|_| OllamaError::Json)?;
-        Ok(resp.results)
+        Ok(resp.results.unwrap_or_default())
     }
 
     fn web_fetch(&self, url: &Url) -> Result<WebPage, OllamaError> {
@@ -214,13 +234,14 @@ impl Ollama {
             .timeout(WEB_TIMEOUT)
             .json(body)
             .send()
-            .map_err(|_| OllamaError::Unreachable)?;
+            .map_err(|e| send_error(&e))?;
         let status = resp.status().as_u16();
         if (300..400).contains(&status) {
             return Err(OllamaError::Redirect);
         }
-        // 404: Ollama predates these routes. 401/403: not signed in, or
-        // cloud features disabled. Either way, no lookup and no chat.
+        // The daemon proxies these to its cloud service: 401 not signed in, 403 cloud
+        // disabled, 404 predates the routes, 429/5xx upstream. No lookup and
+        // no chat either way; `web_hint` names the fix.
         if status != 200 {
             return Err(OllamaError::WebUnavailable { status });
         }
@@ -240,7 +261,7 @@ impl Ollama {
             .timeout(CHAT_TIMEOUT)
             .json(&body)
             .send()
-            .map_err(|_| OllamaError::Unreachable)?;
+            .map_err(|e| send_error(&e))?;
         let status = resp.status().as_u16();
         if (300..400).contains(&status) {
             return Err(OllamaError::Redirect);
@@ -252,7 +273,7 @@ impl Ollama {
             return Err(OllamaError::ModelMissing);
         }
         if status != 200 {
-            return Err(OllamaError::Http { status });
+            return Err(http_error(status, resp));
         }
         if let Some(len) = resp.content_length() {
             if len > MAX_BODY {
@@ -261,13 +282,17 @@ impl Ollama {
         }
         let bytes = response_bytes(resp)?;
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| OllamaError::Json)?;
-        v.get("choices")
+        let content = v
+            .get("choices")
             .and_then(|c| c.get(0))
             .and_then(|c| c.get("message"))
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_str())
-            .map(str::to_string)
-            .ok_or(OllamaError::Json)
+            .ok_or(OllamaError::Json)?;
+        if content.trim().is_empty() {
+            return Err(OllamaError::EmptyReply);
+        }
+        Ok(content.to_string())
     }
 }
 
@@ -285,6 +310,51 @@ fn chat_body(message: &str) -> ChatBody<'_> {
             },
         ],
         stream: false,
+        reasoning_effort: REASONING_EFFORT,
+        temperature: TEMPERATURE,
+        top_p: TOP_P,
+        presence_penalty: PRESENCE_PENALTY,
+    }
+}
+
+/// A timeout is not "asleep": the daemon took the connection but not the turn.
+fn send_error(e: &reqwest::Error) -> OllamaError {
+    if e.is_timeout() {
+        OllamaError::Timeout
+    } else {
+        OllamaError::Unreachable
+    }
+}
+
+/// Keeps the daemon's own reason (e.g. "model 'x' not found, try pulling it
+/// first", "server busy") as one short, control-free line. Both the OpenAI
+/// `{"error":{"message":…}}` and native `{"error":"…"}` shapes are read.
+fn http_error(status: u16, resp: reqwest::blocking::Response) -> OllamaError {
+    let message = response_bytes(resp)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| {
+            let e = v.get("error")?;
+            e.get("message")
+                .and_then(Value::as_str)
+                .or_else(|| e.as_str())
+                .map(|m| one_line(&display::bubble_text(m), DETAIL_CHARS))
+        })
+        .filter(|m| !m.is_empty());
+    OllamaError::Http {
+        status,
+        detail: message.map(|m| format!(": {m}")).unwrap_or_default(),
+    }
+}
+
+fn web_hint(status: u16) -> &'static str {
+    match status {
+        401 => "run `ollama signin`",
+        403 => "Ollama's cloud features are turned off",
+        404 => "this Ollama has no web routes; update it",
+        429 => "Ollama's web service is rate limiting; try again later",
+        500..=599 => "Ollama couldn't reach its web service; check the connection",
+        _ => "Ollama's web service refused the lookup",
     }
 }
 
@@ -373,6 +443,169 @@ mod tests {
         assert_eq!(v["messages"][0]["content"], SYSTEM_PROMPT);
         assert_eq!(v["messages"][1]["role"], "user");
         assert_eq!(v["messages"][1]["content"], "hi");
+    }
+
+    #[test]
+    fn body_asks_for_a_direct_answer_with_qwen_sampling() {
+        // Without these, Ollama's OpenAI route thinks at "medium" for qwen3.8
+        // and samples at temperature/top_p 1.0.
+        let v = chat_body_json("hi");
+        assert_eq!(v["reasoning_effort"], "none");
+        assert_eq!(v["temperature"], 0.7_f32 as f64);
+        assert_eq!(v["top_p"], 0.8_f32 as f64);
+        assert_eq!(v["presence_penalty"], 1.5);
+    }
+
+    #[test]
+    fn daemon_error_reason_reaches_the_bubble_as_one_short_line() {
+        let mut server = mockito::Server::new();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(500)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"error":{"message":"timeout waiting for mlx runner to start\n\u001b[31m","type":"api_error","param":null,"code":null}}"#)
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        let err = o.chat("hi").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ollama http 500: timeout waiting for mlx runner to start"
+        );
+        let mut server = mockito::Server::new();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(503)
+            .with_body(format!(r#"{{"error":"{}"}}"#, "x".repeat(500)))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        match o.chat("hi").unwrap_err() {
+            OllamaError::Http {
+                status: 503,
+                detail,
+            } => {
+                assert_eq!(detail.chars().count(), 2 + DETAIL_CHARS + 1)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_blob_404_keeps_the_pull_hint() {
+        let mut server = mockito::Server::new();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(404)
+            .with_body(r#"{"error":{"message":"model \"qwen3.8:27b-mlx\" not found, try pulling it first","type":"not_found_error","param":null,"code":null}}"#)
+            .create();
+        let _tags = server
+            .mock("GET", GET_TAGS)
+            .with_status(200)
+            .with_body(r#"{"models":[{"name":"qwen3.8:27b-mlx"}]}"#)
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(o
+            .chat("hi")
+            .unwrap_err()
+            .to_string()
+            .ends_with("not found, try pulling it first"));
+    }
+
+    #[test]
+    fn empty_reply_is_explicit() {
+        let mut server = mockito::Server::new();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(200)
+            .with_body(json_reply("  "))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(o.chat("hi"), Err(OllamaError::EmptyReply)));
+    }
+
+    #[test]
+    fn a_slow_daemon_is_a_timeout_not_asleep() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hold = std::thread::spawn(move || listener.accept().map(|(s, _)| s));
+        let err = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(200))
+            .build()
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/api/tags"))
+            .send()
+            .unwrap_err();
+        assert!(matches!(send_error(&err), OllamaError::Timeout));
+        drop(hold);
+        assert!(matches!(
+            Ollama::from_origin(LoopbackOrigin::from_port(1))
+                .unwrap()
+                .chat("hi"),
+            Err(OllamaError::Unreachable)
+        ));
+    }
+
+    #[test]
+    fn null_search_results_are_no_results() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_status(200)
+            .with_body(r#"{"results":null}"#)
+            .create();
+        let chat = server
+            .mock("POST", POST_CHAT)
+            .match_body(mockito::Matcher::Regex("No results.".into()))
+            .with_status(200)
+            .with_body(json_reply("nothing found"))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert_eq!(
+            o.chat("look up zzqx").unwrap(),
+            "nothing found [via web ×1]"
+        );
+        chat.assert();
+    }
+
+    #[test]
+    fn web_failures_name_their_fix() {
+        // Bodies are the daemon's own (server/cloud_proxy.go) or upstream's.
+        for (status, body, hint) in [
+            (
+                401,
+                r#"{"error":"unauthorized","signin_url":"https://ollama.com/connect?name=m&key=k"}"#,
+                "ollama signin",
+            ),
+            (
+                403,
+                r#"{"error":"ollama cloud is disabled: web search is unavailable"}"#,
+                "cloud features are turned off",
+            ),
+            (404, "404 page not found", "update it"),
+            (429, r#"{"error":"rate limit exceeded"}"#, "rate limiting"),
+            (
+                502,
+                r#"{"error":"dial tcp: lookup ollama.com: no such host"}"#,
+                "check the connection",
+            ),
+        ] {
+            let mut server = mockito::Server::new();
+            let _search = server
+                .mock("POST", POST_WEB_SEARCH)
+                .with_status(status)
+                .with_body(body)
+                .create();
+            let o = Ollama::from_origin(origin_for(&server)).unwrap();
+            let msg = o.chat("look up ollama").unwrap_err().to_string();
+            assert!(
+                msg.contains(&format!("(http {status})")) && msg.contains(hint),
+                "{msg}"
+            );
+            assert!(
+                !msg.contains("signin_url") && !msg.contains("key="),
+                "{msg}"
+            );
+        }
     }
 
     #[test]
@@ -493,7 +726,7 @@ mod tests {
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(
             o.chat("hi"),
-            Err(OllamaError::Http { status: 404 })
+            Err(OllamaError::Http { status: 404, .. })
         ));
     }
 
@@ -505,7 +738,7 @@ mod tests {
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(
             o.chat("hi"),
-            Err(OllamaError::Http { status: 404 })
+            Err(OllamaError::Http { status: 404, .. })
         ));
     }
 

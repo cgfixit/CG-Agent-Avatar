@@ -92,7 +92,10 @@ layer that can hold it.
   - The model tag is the constant `qwen3.8:27b-mlx`; `tags_ok` requires that
     exact tag, and a chat 404 with the tag absent becomes `ModelMissing`.
   - Each chat carries the bundled `resources/direct-ollama-system.md` as the
-    system message plus the current message: no history, no tools. When the
+    system message plus the current message: no history, no tools. It sends
+    `reasoning_effort: "none"` and Qwen's non-thinking sampling (temperature
+    0.7, top_p 0.8, presence_penalty 1.5); Ollama's OpenAI route would
+    otherwise think at "medium" and sample at 1.0. When the
     message starts with an explicit lookup phrase, it also carries one search or
     page read, run through the local daemon and passed as untrusted text.
 - **`web_intent.rs`** (pure): decides whether a message is an explicit web
