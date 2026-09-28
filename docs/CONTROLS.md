@@ -19,6 +19,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness found, not logged in | Bubble says `login required — use Harness Login… in the menu` |
 | Harness needs a password change | Bubble says `bootstrap password must be changed — use Harness Password Reset…` |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust` |
+| Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Bubble appends a compact `[via web ×N]` note. For Harness, N counts Harness's own web tool calls. For Direct Ollama it is `×1`, the lookup you asked for. Avatar never fetches pages itself |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.

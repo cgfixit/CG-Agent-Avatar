@@ -2,6 +2,7 @@
 //! Redirects are refused. Only allowlisted paths. No forwarding headers.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::csrf;
@@ -9,9 +10,13 @@ use crate::http::{self, ReadError, MAX_BODY};
 use crate::origin::{LoopbackOrigin, OriginError};
 use crate::paths;
 use crate::validate::{self, ValidateError};
+use reqwest::cookie::Jar;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+
+/// In-memory cookie jar that clients of one harness can share.
+pub type SessionJar = Jar;
 
 pub const SESSION_TITLE: &str = "CG-Agent";
 const CSRF_HEADER: &str = "X-CyClaw-CSRF";
@@ -50,6 +55,10 @@ pub enum ClientError {
     ResponseTooLarge,
     #[error("redirect refused")]
     Redirect,
+    #[error("harness session is gone")]
+    SessionGone,
+    #[error("harness is rate limiting requests")]
+    RateLimited,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,8 +74,8 @@ pub struct Status {
     pub api_key_optional: bool,
     #[serde(default)]
     pub version: String,
-    /// Present (and true) on fresh homes even before login; absent on
-    /// legacy homes with `auth.enabled: false`.
+    /// Only in the thin, pre-login shape of an auth-enabled home. The full
+    /// shape omits it even when accounts are on.
     #[serde(default)]
     pub auth_enabled: bool,
 }
@@ -128,22 +137,29 @@ impl fmt::Debug for Client {
     }
 }
 
-fn builder() -> reqwest::blocking::ClientBuilder {
+/// Every client keeps its session cookie in memory only. Clients for the same
+/// harness may share one jar so a login on one thread is seen by another.
+fn builder(jar: Arc<Jar>) -> reqwest::blocking::ClientBuilder {
     reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(CHAT_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .cookie_store(true)
+        .cookie_provider(jar)
 }
 
 impl Client {
     pub fn new(origin: LoopbackOrigin) -> Result<Self, ClientError> {
+        Self::with_jar(origin, Arc::default())
+    }
+
+    /// Like [`Client::new`], sharing `jar` with other clients of this harness.
+    pub fn with_jar(origin: LoopbackOrigin, jar: Arc<Jar>) -> Result<Self, ClientError> {
         if origin.is_https() {
             return Err(ClientError::SchemeMismatch);
         }
-        let http = builder().build().map_err(|_| ClientError::Unreachable)?;
+        let http = builder(jar).build().map_err(|_| ClientError::Unreachable)?;
         Ok(Self {
             origin,
             http,
@@ -156,6 +172,15 @@ impl Client {
     /// own home directory (see `home::read_pinned_cert`) — never from the
     /// network, and never with `danger_accept_invalid_certs`.
     pub fn new_https(origin: LoopbackOrigin, cert_pem: &[u8]) -> Result<Self, ClientError> {
+        Self::https_with_jar(origin, cert_pem, Arc::default())
+    }
+
+    /// Like [`Client::new_https`], sharing `jar` with other clients of this harness.
+    pub fn https_with_jar(
+        origin: LoopbackOrigin,
+        cert_pem: &[u8],
+        jar: Arc<Jar>,
+    ) -> Result<Self, ClientError> {
         if !origin.is_https() {
             return Err(ClientError::SchemeMismatch);
         }
@@ -174,7 +199,7 @@ impl Client {
         }
         let cert =
             reqwest::Certificate::from_pem(cert_pem).map_err(|_| ClientError::CertMismatch)?;
-        let http = builder()
+        let http = builder(jar)
             .tls_built_in_root_certs(false)
             .add_root_certificate(cert)
             .build()
@@ -218,27 +243,40 @@ impl Client {
         if !paths::is_allowed_post(path) {
             return Err(OriginError::PathNotAllowed.into());
         }
-        self.ensure_csrf()?;
-        let token = self.csrf.clone().ok_or(ClientError::CsrfMissing)?;
         let url = self.origin.url_for(path)?;
-        let resp = self
-            .http
-            .post(url)
-            .timeout(timeout)
-            .header(CSRF_HEADER, token)
-            .json(body)
-            .send()
-            .map_err(|e| classify_send_error(&e))?;
-        check_redirect(&resp)?;
-        Ok(resp)
+        // The console token is per harness process. After a restart on the same
+        // port the cached one is stale; the CSRF layer rejects before the
+        // handler runs, so one refresh-and-resend is safe.
+        for attempt in 0..2 {
+            self.ensure_csrf()?;
+            let token = self.csrf.clone().ok_or(ClientError::CsrfMissing)?;
+            let resp = self
+                .http
+                .post(&url)
+                .timeout(timeout)
+                .header(CSRF_HEADER, token)
+                .json(body)
+                .send()
+                .map_err(|e| classify_send_error(&e))?;
+            check_redirect(&resp)?;
+            if resp.status().as_u16() != 403 {
+                return Ok(resp);
+            }
+            let code = error_code(resp);
+            if attempt == 0 && code.as_deref() == Some("CSRF_TOKEN_INVALID") {
+                self.csrf = None;
+                continue;
+            }
+            return Err(forbidden(code));
+        }
+        unreachable!("the loop returns on its second pass")
     }
 
     /// Log in to a fresh (auth-enabled) harness home. Does not send a CSRF
-    /// header — cg-agent-harness's `/api/auth/login` sits outside both its
-    /// CSRF and session middleware (verified against its
-    /// src/server/routes/mod.rs router setup). The response's CSRF token is
-    /// session-scoped, while ordinary guarded routes require the console's
-    /// process token, so the next mutation refreshes it from `GET /`.
+    /// header — cg-agent-harness's `/api/auth/login` sits in its `auth_open`
+    /// router, outside the CSRF layer. The response is
+    /// `{username, role, must_change_password}` plus the session cookie;
+    /// guarded routes keep using the console's process token from `GET /`.
     pub fn login(&mut self, username: &str, password: &str) -> Result<LoginInfo, ClientError> {
         let path = paths::POST_AUTH_LOGIN;
         if !paths::is_allowed_post(path) {
@@ -259,12 +297,6 @@ impl Client {
             return Err(map_http(resp));
         }
         let v: Value = parse_json(resp)?;
-        let raw_csrf = v
-            .get("csrf_token")
-            .and_then(|s| s.as_str())
-            .ok_or(ClientError::Json)?;
-        csrf::accept_token(raw_csrf).ok_or(ClientError::CsrfMissing)?;
-        self.csrf = None;
         Ok(LoginInfo {
             username: v
                 .get("username")
@@ -314,6 +346,9 @@ impl Client {
     pub fn status(&self) -> Result<Status, ClientError> {
         let resp = self.get(paths::GET_STATUS)?;
         let status = resp.status().as_u16();
+        if status == 429 {
+            return Err(ClientError::RateLimited);
+        }
         if status != 200 {
             return Err(ClientError::Http {
                 status,
@@ -429,8 +464,14 @@ impl Client {
         if status == 401 {
             return Err(classify_unauthorized(resp));
         }
-        if status == 403 {
-            return Err(classify_forbidden(resp));
+        if status == 404 {
+            // Unknown or foreign session, e.g. after the console cleared them.
+            return match map_http(resp) {
+                ClientError::Http { code, .. } if code == "HARNESS_SESSION_ERROR" => {
+                    Err(ClientError::SessionGone)
+                }
+                other => Err(other),
+            };
         }
         if status != 200 {
             return Err(map_http(resp));
@@ -498,19 +539,29 @@ fn classify_send_error(e: &reqwest::Error) -> ClientError {
 /// user can act on directly (Client::login). Anything else on a 401 falls
 /// back to the older, now largely dead, optional-API-key model.
 fn classify_unauthorized(resp: reqwest::blocking::Response) -> ClientError {
-    let code = parse_json::<Value>(resp)
-        .ok()
-        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(str::to_string));
-    match code.as_deref() {
+    match error_code(resp).as_deref() {
         Some("AUTH_REQUIRED") => ClientError::LoginRequired,
         _ => ClientError::KeyRequired,
     }
 }
 
 fn classify_forbidden(resp: reqwest::blocking::Response) -> ClientError {
-    let code = parse_json::<Value>(resp)
-        .ok()
-        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(str::to_string));
+    forbidden(error_code(resp))
+}
+
+/// The harness wraps errors as `{"detail":{"code":…,"message":…}}`
+/// (cg-agent-harness src/server/errors.rs); a bare top-level `code` is
+/// still accepted. Codes are clipped before they reach any message.
+fn error_code(resp: reqwest::blocking::Response) -> Option<String> {
+    let v = parse_json::<Value>(resp).ok()?;
+    v.get("detail")
+        .and_then(|d| d.get("code"))
+        .or_else(|| v.get("code"))
+        .and_then(Value::as_str)
+        .map(|c| c.chars().take(64).collect())
+}
+
+fn forbidden(code: Option<String>) -> ClientError {
     match code.as_deref() {
         Some("AUTH_PASSWORD_CHANGE_REQUIRED") => ClientError::PasswordChangeRequired,
         _ => ClientError::Http {
@@ -557,11 +608,10 @@ fn map_http(resp: reqwest::blocking::Response) -> ClientError {
     if (300..400).contains(&status) {
         return ClientError::Redirect;
     }
-    let code = parse_json::<Value>(resp)
-        .ok()
-        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(str::to_string))
-        .unwrap_or_else(|| "HTTP".into());
-    let code: String = code.chars().take(64).collect();
+    if status == 429 {
+        return ClientError::RateLimited;
+    }
+    let code = error_code(resp).unwrap_or_else(|| "HTTP".into());
     ClientError::Http { status, code }
 }
 
@@ -779,9 +829,9 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header("set-cookie", "cgagentharness_session=abc; HttpOnly; Path=/")
-            .with_body(
-                r#"{"username":"admin","role":"admin","csrf_token":"sessiontoken123","must_change_password":false}"#,
-            )
+            // The harness's real login body: no token field (its
+            // tests/secure_portal.rs asserts the absence).
+            .with_body(r#"{"username":"admin","role":"admin","must_change_password":false}"#)
             .create();
         let mut c = Client::new(origin_for(&server)).unwrap();
         let info = c.login("admin", "hunter2").unwrap();
@@ -790,8 +840,7 @@ mod tests {
         assert!(!info.must_change_password);
         login.assert();
 
-        // Harness returns a session token here, but its guarded routes use
-        // the process token rendered in the console.
+        // Guarded routes use the process token rendered in the console.
         let sessions = server
             .mock("GET", "/api/sessions")
             .with_header("content-type", "application/json")
@@ -916,6 +965,140 @@ mod tests {
         let mut c = Client::new(origin_for(&server)).unwrap();
         let r = c.chat("abc", "hi").unwrap();
         assert_eq!(r.web_tools.len(), 1);
+    }
+
+    /// cg-agent-harness src/server/errors.rs: every JSON error is nested.
+    fn harness_error(code: &str) -> String {
+        format!(r#"{{"detail":{{"code":"{code}","message":"m","details":{{}}}}}}"#)
+    }
+
+    #[test]
+    fn nested_harness_error_codes_are_read() {
+        for (status, code, want) in [
+            (401, "AUTH_REQUIRED", "login"),
+            (403, "AUTH_PASSWORD_CHANGE_REQUIRED", "password"),
+            (502, "HARNESS_LLM_ERROR", "HARNESS_LLM_ERROR"),
+        ] {
+            let mut server = mockito::Server::new();
+            let _html = server.mock("GET", "/").with_body(html_ok()).create();
+            let _chat = server
+                .mock("POST", "/api/chat")
+                .with_status(status)
+                .with_body(harness_error(code))
+                .create();
+            let mut c = Client::new(origin_for(&server)).unwrap();
+            let err = c.chat("abc", "hi").unwrap_err();
+            let ok = match want {
+                "login" => matches!(err, ClientError::LoginRequired),
+                "password" => matches!(err, ClientError::PasswordChangeRequired),
+                code => matches!(err, ClientError::Http { code: ref got, .. } if got == code),
+            };
+            assert!(ok, "{status} {code}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn stale_console_token_is_refreshed_once_after_a_harness_restart() {
+        let mut server = mockito::Server::new();
+        let console = server
+            .mock("GET", "/")
+            .with_body(html_ok())
+            .expect(1)
+            .create();
+        let stale = server
+            .mock("POST", "/api/chat")
+            .match_header("X-CyClaw-CSRF", "stale-token-1")
+            .with_status(403)
+            .with_body(harness_error("CSRF_TOKEN_INVALID"))
+            .expect(1)
+            .create();
+        let fresh = server
+            .mock("POST", "/api/chat")
+            .match_header("X-CyClaw-CSRF", "tok12345")
+            .with_body(r#"{"session_id":"abc","reply":"back","model":"m"}"#)
+            .expect(1)
+            .create();
+        let mut c = Client::new(origin_for(&server)).unwrap();
+        c.csrf = Some("stale-token-1".into());
+        assert_eq!(c.chat("abc", "hi").unwrap().reply, "back");
+        console.assert();
+        stale.assert();
+        fresh.assert();
+    }
+
+    #[test]
+    fn csrf_retry_happens_once_then_reports_forbidden() {
+        let mut server = mockito::Server::new();
+        let _html = server.mock("GET", "/").with_body(html_ok()).create();
+        let chat = server
+            .mock("POST", "/api/chat")
+            .with_status(403)
+            .with_body(harness_error("CSRF_TOKEN_INVALID"))
+            .expect(2)
+            .create();
+        let mut c = Client::new(origin_for(&server)).unwrap();
+        assert!(matches!(
+            c.chat("abc", "hi"),
+            Err(ClientError::Http { status: 403, ref code }) if code == "CSRF_TOKEN_INVALID"
+        ));
+        chat.assert();
+    }
+
+    #[test]
+    fn cleared_session_is_session_gone_and_rate_limit_is_distinct() {
+        let mut server = mockito::Server::new();
+        let _html = server.mock("GET", "/").with_body(html_ok()).create();
+        let _chat = server
+            .mock("POST", "/api/chat")
+            .with_status(404)
+            .with_body(harness_error("HARNESS_SESSION_ERROR"))
+            .create();
+        let _status = server
+            .mock("GET", "/api/status")
+            .with_status(429)
+            .with_header("retry-after", "3")
+            .with_body(harness_error("RATE_LIMIT"))
+            .create();
+        let mut c = Client::new(origin_for(&server)).unwrap();
+        assert!(matches!(c.chat("abc", "hi"), Err(ClientError::SessionGone)));
+        assert!(matches!(c.status(), Err(ClientError::RateLimited)));
+    }
+
+    #[test]
+    fn clients_sharing_a_jar_share_the_login() {
+        let mut server = mockito::Server::new();
+        let _login = server
+            .mock("POST", "/api/auth/login")
+            .with_header(
+                "set-cookie",
+                "cgagentharness_session=s3cr3t; HttpOnly; SameSite=Strict; Path=/",
+            )
+            .with_body(r#"{"username":"admin","role":"admin","must_change_password":false}"#)
+            .create();
+        let status = server
+            .mock("GET", "/api/status")
+            .match_header("cookie", "cgagentharness_session=s3cr3t")
+            .with_body(r#"{"model":"m","provider":"ollama","api_key_optional":true}"#)
+            .create();
+        let jar = Arc::new(Jar::default());
+        let mut chat = Client::with_jar(origin_for(&server), Arc::clone(&jar)).unwrap();
+        let poller = Client::with_jar(origin_for(&server), jar).unwrap();
+        chat.login("admin", "pw").unwrap();
+        assert_eq!(poller.status().unwrap().model, "m");
+        status.assert();
+        // A client with its own jar stays logged out.
+        let other = server
+            .mock("GET", "/api/status")
+            .match_header("cookie", mockito::Matcher::Missing)
+            .with_body(r#"{"version":"1","auth_enabled":true,"api_key_optional":true}"#)
+            .create();
+        assert!(Client::new(origin_for(&server))
+            .unwrap()
+            .status()
+            .unwrap()
+            .model
+            .is_empty());
+        other.assert();
     }
 
     #[test]

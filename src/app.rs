@@ -4,8 +4,8 @@
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -23,11 +23,11 @@ use objc2_foundation::{
     NSRect, NSSize, NSString, NSTimer,
 };
 
-use crate::client::{Client, ClientError};
+use crate::client::{Client, ClientError, SessionJar};
 use crate::discover;
 use crate::display;
 use crate::home;
-use crate::mood::{self, Mood, MoodInput};
+use crate::mood::{self, Health, Mood};
 use crate::ollama::{self, Ollama, OllamaError};
 use crate::origin::LoopbackOrigin;
 use crate::theme;
@@ -37,6 +37,12 @@ const PNG: &[u8] = include_bytes!("../assets/creature.png");
 const BACKEND_HARNESS: u8 = 0;
 const BACKEND_OLLAMA: u8 = 1;
 const DEFAULT_BACKEND: u8 = BACKEND_OLLAMA;
+/// How often the selected backend is checked over the network. Harness counts
+/// these against its per-IP API budget (60/min by default), shared with its
+/// own console, so this stays well under it.
+const POLL_EVERY: Duration = Duration::from_secs(5);
+/// How often the mood is re-derived from the last check plus chat state.
+const MOOD_EVERY: Duration = Duration::from_millis(250);
 
 struct Shared {
     mood: Mutex<Mood>,
@@ -54,6 +60,11 @@ struct Shared {
     /// false` homes). Read by both the status and chat worker threads so
     /// they agree on which `Client` constructor to use.
     scheme_https: AtomicBool,
+    /// One in-memory cookie jar for every harness client, so the status
+    /// check sees the chat worker's login instead of the pre-login view.
+    jar: Arc<SessionJar>,
+    /// Set after login or a password change to re-check status right away.
+    repoll: AtomicBool,
 }
 
 struct Walk {
@@ -998,13 +1009,97 @@ fn text_color(active: &theme::Theme) -> Retained<NSColor> {
 /// (`home::read_pinned_cert`) — with no cert available, an HTTPS-resolved
 /// port simply cannot be connected to yet (that itself is a meaningful,
 /// non-"asleep" state, surfaced by the caller checking for `None`).
-fn build_harness_client(port: u16, https: bool, home_dir: &std::path::Path) -> Option<Client> {
+fn build_harness_client(
+    port: u16,
+    https: bool,
+    cert: Option<&[u8]>,
+    jar: &Arc<SessionJar>,
+) -> Option<Client> {
     if https {
-        let cert = home::read_pinned_cert(home_dir)?;
-        Client::new_https(LoopbackOrigin::from_port_https(port), &cert).ok()
+        Client::https_with_jar(
+            LoopbackOrigin::from_port_https(port),
+            cert?,
+            Arc::clone(jar),
+        )
+        .ok()
     } else {
-        Client::from_port(port).ok()
+        Client::with_jar(LoopbackOrigin::from_port(port), Arc::clone(jar)).ok()
     }
+}
+
+/// The status worker's client, kept until the harness stops answering or its
+/// pinned certificate changes, so a healthy check is one request.
+struct StatusClient {
+    cert: Option<Vec<u8>>,
+    client: Client,
+}
+
+fn ollama_health(ollama: Option<&Ollama>) -> Health {
+    match ollama
+        .ok_or(OllamaError::Unreachable)
+        .and_then(Ollama::tags_ok)
+    {
+        Ok(true) => Health::Ready {
+            api_key_optional: true,
+            model: ollama::MODEL.into(),
+            provider: "ollama".into(),
+        },
+        Err(OllamaError::Unreachable) => Health::Asleep,
+        Ok(false) | Err(_) => Health::Sick,
+    }
+}
+
+fn harness_health(
+    cache: &mut Option<StatusClient>,
+    preferred: u16,
+    home_dir: &std::path::Path,
+    shared: &Shared,
+    last: &Health,
+) -> Health {
+    let from_status = |s: crate::client::Status| {
+        if s.model.is_empty() {
+            // The thin, pre-login shape: the harness is there, not usable yet.
+            Health::Sick
+        } else {
+            Health::Ready {
+                api_key_optional: s.api_key_optional,
+                model: s.model,
+                provider: s.provider,
+            }
+        }
+    };
+    let cert = home::read_pinned_cert(home_dir);
+    if let Some(cached) = cache.as_ref().filter(|c| c.cert == cert) {
+        match cached.client.status() {
+            // Something other than a harness can take over a freed port.
+            Ok(s) if !s.model.is_empty() || s.auth_enabled => return from_status(s),
+            Err(ClientError::RateLimited) => return last.clone(),
+            _ => {}
+        }
+    }
+    *cache = None;
+    // Re-probe (https first, then legacy http, across the lsof candidates)
+    // only when the cached connection stopped answering as a harness.
+    let Some(reachable) = discover::resolve_reachable(preferred, cert.as_deref()) else {
+        return Health::Asleep;
+    };
+    let (port, https) = match reachable {
+        discover::Reachable::Http(p) => (p, false),
+        discover::Reachable::Https(p) => (p, true),
+    };
+    shared.port.store(port, Ordering::SeqCst);
+    shared.scheme_https.store(https, Ordering::SeqCst);
+    let Some(client) = build_harness_client(port, https, cert.as_deref(), &shared.jar) else {
+        return Health::Asleep;
+    };
+    let health = match client.status() {
+        Ok(s) => from_status(s),
+        Err(ClientError::Unreachable) => Health::Asleep,
+        Err(ClientError::RateLimited) => last.clone(),
+        Err(_) => Health::Sick,
+    };
+    *cache = Some(StatusClient { cert, client });
+    health
 }
 
 fn preview_text(reply: &str, in_flight: bool) -> String {
@@ -1054,147 +1149,29 @@ fn spawn_workers(shared: Arc<Shared>) {
         .spawn({
             let shared = Arc::clone(&shared);
             let home_dir = home_dir.clone();
-            move || loop {
-                let backend = shared.backend.load(Ordering::Relaxed);
-                let input = if backend == BACKEND_OLLAMA {
-                    match status_ollama
-                        .as_ref()
-                        .ok_or(OllamaError::Unreachable)
-                        .and_then(|o| o.tags_ok())
-                    {
-                        Ok(true) => MoodInput {
-                            reachable: true,
-                            http_ok: true,
-                            api_key_optional: true,
-                            model: ollama::MODEL.into(),
-                            provider: "ollama".into(),
-                            chat_in_flight: shared.in_flight.load(Ordering::Relaxed),
-                            talking_until: shared.talking.load(Ordering::Relaxed),
-                        },
-                        Ok(false) => MoodInput {
-                            reachable: true,
-                            http_ok: false,
-                            api_key_optional: true,
-                            model: String::new(),
-                            provider: "ollama".into(),
-                            chat_in_flight: false,
-                            talking_until: false,
-                        },
-                        Err(OllamaError::Unreachable) => MoodInput {
-                            reachable: false,
-                            http_ok: false,
-                            api_key_optional: true,
-                            model: String::new(),
-                            provider: String::new(),
-                            chat_in_flight: false,
-                            talking_until: false,
-                        },
-                        Err(_) => MoodInput {
-                            reachable: true,
-                            http_ok: false,
-                            api_key_optional: true,
-                            model: String::new(),
-                            provider: "ollama".into(),
-                            chat_in_flight: false,
-                            talking_until: false,
-                        },
-                    }
-                } else {
-                    {
-                        let pinned_cert = home::read_pinned_cert(&home_dir);
-                        let current_port = shared.port.load(Ordering::Relaxed);
-                        let current_https = shared.scheme_https.load(Ordering::Relaxed);
-                        // Re-probe the currently-cached port/scheme first so
-                        // a healthy connection doesn't pay for a full
-                        // rediscovery sweep every 2s; only fall back to
-                        // discover::resolve_reachable (https-first, then
-                        // legacy http, across the lsof candidate list) when
-                        // that fails.
-                        let still_ok = if current_https {
-                            pinned_cert.as_deref().is_some_and(|cert| {
-                                discover::probe_harness_https(current_port, cert)
-                            })
+            move || {
+                let mut cache = None::<StatusClient>;
+                let mut health = Health::Asleep;
+                let mut polled = None::<(u8, Instant)>;
+                loop {
+                    let backend = shared.backend.load(Ordering::Relaxed);
+                    let due = shared.repoll.swap(false, Ordering::SeqCst)
+                        || polled.is_none_or(|(b, at)| b != backend || at.elapsed() >= POLL_EVERY);
+                    if due {
+                        health = if backend == BACKEND_OLLAMA {
+                            ollama_health(status_ollama.as_ref())
                         } else {
-                            discover::probe_harness(current_port)
+                            harness_health(&mut cache, preferred, &home_dir, &shared, &health)
                         };
-                        let reachable = if still_ok {
-                            Some(if current_https {
-                                discover::Reachable::Https(current_port)
-                            } else {
-                                discover::Reachable::Http(current_port)
-                            })
-                        } else {
-                            discover::resolve_reachable(preferred, pinned_cert.as_deref())
-                        };
-                        match reachable {
-                            None => MoodInput {
-                                reachable: false,
-                                http_ok: false,
-                                api_key_optional: true,
-                                model: String::new(),
-                                provider: String::new(),
-                                chat_in_flight: false,
-                                talking_until: false,
-                            },
-                            Some(r) => {
-                                let (port, https) = match r {
-                                    discover::Reachable::Http(p) => (p, false),
-                                    discover::Reachable::Https(p) => (p, true),
-                                };
-                                shared.port.store(port, Ordering::SeqCst);
-                                shared.scheme_https.store(https, Ordering::SeqCst);
-                                match build_harness_client(port, https, &home_dir)
-                                    .ok_or(ClientError::Unreachable)
-                                    .and_then(|c| c.status())
-                                {
-                                    Ok(s) if !s.model.is_empty() => MoodInput {
-                                        reachable: true,
-                                        http_ok: true,
-                                        api_key_optional: s.api_key_optional,
-                                        model: s.model,
-                                        provider: s.provider,
-                                        chat_in_flight: shared.in_flight.load(Ordering::Relaxed),
-                                        talking_until: shared.talking.load(Ordering::Relaxed),
-                                    },
-                                    // Includes the thin, login-required shape
-                                    // (found the harness, no model yet since
-                                    // this client hasn't logged in) — Sick is
-                                    // the closest existing mood, matching
-                                    // pre-HTTPS behavior for this same case.
-                                    Ok(_) => MoodInput {
-                                        reachable: true,
-                                        http_ok: false,
-                                        api_key_optional: true,
-                                        model: String::new(),
-                                        provider: String::new(),
-                                        chat_in_flight: false,
-                                        talking_until: false,
-                                    },
-                                    Err(ClientError::Unreachable) => MoodInput {
-                                        reachable: false,
-                                        http_ok: false,
-                                        api_key_optional: true,
-                                        model: String::new(),
-                                        provider: String::new(),
-                                        chat_in_flight: false,
-                                        talking_until: false,
-                                    },
-                                    Err(_) => MoodInput {
-                                        reachable: true,
-                                        http_ok: false,
-                                        api_key_optional: true,
-                                        model: String::new(),
-                                        provider: String::new(),
-                                        chat_in_flight: false,
-                                        talking_until: false,
-                                    },
-                                }
-                            }
-                        }
+                        polled = Some((backend, Instant::now()));
                     }
-                };
-                *shared.mood.lock().unwrap() = mood::mood(input);
-                std::thread::sleep(Duration::from_secs(2));
+                    let input = health.input(
+                        shared.in_flight.load(Ordering::Relaxed),
+                        shared.talking.load(Ordering::Relaxed),
+                    );
+                    *shared.mood.lock().unwrap_or_else(PoisonError::into_inner) = mood::mood(input);
+                    std::thread::sleep(MOOD_EVERY);
+                }
             }
         })
         .expect("status thread");
@@ -1223,6 +1200,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             Some(client) => match client.change_password(&current_password, &password) {
                                 Ok(()) => {
                                     session = None;
+                                    shared.repoll.store(true, Ordering::SeqCst);
                                     *shared.last_reply.lock().unwrap() =
                                         "password changed — ready to chat".into();
                                 }
@@ -1242,7 +1220,8 @@ fn spawn_workers(shared: Arc<Shared>) {
                         let port = shared.port.load(Ordering::SeqCst);
                         let https = shared.scheme_https.load(Ordering::SeqCst);
                         if port != last_port || https != last_https || harness.is_none() {
-                            harness = build_harness_client(port, https, &home_dir);
+                            let cert = home::read_pinned_cert(&home_dir);
+                            harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
                             session = None;
                             last_port = port;
                             last_https = https;
@@ -1255,6 +1234,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 }
                                 Ok(info) => {
                                     session = None;
+                                    shared.repoll.store(true, Ordering::SeqCst);
                                     *shared.last_reply.lock().unwrap() =
                                         format!("logged in as {}", info.username);
                                 }
@@ -1299,7 +1279,8 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 let port = shared.port.load(Ordering::SeqCst);
                                 let https = shared.scheme_https.load(Ordering::SeqCst);
                                 if port != last_port || https != last_https || harness.is_none() {
-                                    harness = build_harness_client(port, https, &home_dir);
+                                    let cert = home::read_pinned_cert(&home_dir);
+                            harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
                                     session = None;
                                     last_port = port;
                                     last_https = https;
@@ -1308,8 +1289,24 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 if session.is_none() {
                                     session = Some(client.ensure_session()?);
                                 }
-                                client.chat(session.as_deref().unwrap(), &message)
+                                match client.chat(session.as_deref().unwrap(), &message) {
+                                    // Cleared in the console or owned by another
+                                    // account now: pick up (or create) ours, once.
+                                    Err(ClientError::SessionGone) => {
+                                        let id = session.insert(client.ensure_session()?);
+                                        client.chat(id, &message)
+                                    }
+                                    other => other,
+                                }
                             })();
+                            // Rebuild next time: the harness may have restarted
+                            // elsewhere or renewed its certificate.
+                            if matches!(
+                                result,
+                                Err(ClientError::Unreachable | ClientError::CertMismatch)
+                            ) {
+                                harness = None;
+                            }
                             match result {
                                 Ok(reply) => {
                                     let mut text = reply.reply;
@@ -1318,6 +1315,10 @@ fn spawn_workers(shared: Arc<Shared>) {
                                     }
                                     *shared.last_reply.lock().unwrap() = text;
                                     shared.talking.store(true, Ordering::SeqCst);
+                                }
+                                Err(ClientError::RateLimited) => {
+                                    *shared.last_reply.lock().unwrap() =
+                                        "harness is rate limiting — wait a few seconds".into();
                                 }
                                 Err(ClientError::ChatBusy) => {
                                     *shared.last_reply.lock().unwrap() =
@@ -1377,6 +1378,8 @@ pub fn run() {
         backend: AtomicU8::new(DEFAULT_BACKEND),
         port: AtomicU16::new(home::DEFAULT_PORT),
         scheme_https: AtomicBool::new(false),
+        jar: Arc::default(),
+        repoll: AtomicBool::new(false),
     });
     spawn_workers(Arc::clone(&shared));
 

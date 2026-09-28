@@ -10,7 +10,7 @@ pub const POST_CHAT: &str = "/api/chat";
 /// auth.enabled both default true). This route is the harness's own public,
 /// no-session, no-CSRF login endpoint (see cg-agent-harness
 /// src/server/routes/mod.rs: `/api/auth/login` sits in its `auth_open`
-/// router, outside both the CSRF-`guarded` and session-`auth_sess` layers).
+/// router, outside the CSRF layer; `account_gate` lists it as public).
 /// The companion may also change the authenticated account's own password
 /// after a required bootstrap reset. It cannot manage other users.
 pub const POST_AUTH_LOGIN: &str = "/api/auth/login";

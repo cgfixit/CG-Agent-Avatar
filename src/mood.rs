@@ -20,6 +20,43 @@ pub struct MoodInput {
     pub talking_until: bool,
 }
 
+/// What the last network check of the selected backend found. Polled far
+/// less often than the mood is redrawn, so in-flight chat state still shows
+/// immediately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Health {
+    Asleep,
+    Sick,
+    Ready {
+        api_key_optional: bool,
+        model: String,
+        provider: String,
+    },
+}
+
+impl Health {
+    pub fn input(&self, chat_in_flight: bool, talking_until: bool) -> MoodInput {
+        let (reachable, ready) = match self {
+            Health::Asleep => (false, None),
+            Health::Sick => (true, None),
+            Health::Ready {
+                api_key_optional,
+                model,
+                provider,
+            } => (true, Some((*api_key_optional, model, provider))),
+        };
+        MoodInput {
+            reachable,
+            http_ok: ready.is_some(),
+            api_key_optional: ready.is_none_or(|r| r.0),
+            model: ready.map(|r| r.1.clone()).unwrap_or_default(),
+            provider: ready.map(|r| r.2.clone()).unwrap_or_default(),
+            chat_in_flight: ready.is_some() && chat_in_flight,
+            talking_until: ready.is_some() && talking_until,
+        }
+    }
+}
+
 pub fn mood(input: MoodInput) -> Mood {
     if !input.reachable {
         return Mood::Asleep;
@@ -80,6 +117,20 @@ mod tests {
         i.api_key_optional = true;
         i.model.clear();
         assert_eq!(mood(i), Mood::Sick);
+    }
+
+    #[test]
+    fn health_maps_onto_the_existing_moods() {
+        let ready = Health::Ready {
+            api_key_optional: true,
+            model: "m".into(),
+            provider: "p".into(),
+        };
+        assert_eq!(mood(Health::Asleep.input(true, true)), Mood::Asleep);
+        assert_eq!(mood(Health::Sick.input(true, true)), Mood::Sick);
+        assert_eq!(mood(ready.input(false, false)), Mood::Idle);
+        assert_eq!(mood(ready.input(true, false)), Mood::Thinking);
+        assert_eq!(mood(ready.input(false, true)), Mood::Talking);
     }
 
     #[test]
