@@ -22,7 +22,7 @@ pub struct LoopbackOrigin {
 
 fn check_loopback_shape(url: &Url) -> Result<(), OriginError> {
     match url.host() {
-        Some(url::Host::Ipv4(ip)) if ip.is_loopback() => {}
+        Some(url::Host::Ipv4(ip)) if ip == std::net::Ipv4Addr::LOCALHOST => {}
         Some(url::Host::Ipv6(ip)) if ip.is_loopback() => {}
         _ => return Err(OriginError::NotLoopback),
     }
@@ -131,6 +131,28 @@ mod tests {
     fn accepts_explicit_ipv4_and_ipv6_loopback() {
         assert!(LoopbackOrigin::parse("http://127.0.0.1:8790").is_ok());
         assert!(LoopbackOrigin::parse("http://[::1]:8790").is_ok());
+    }
+
+    #[test]
+    fn rejects_other_ipv4_loopback_addresses_http() {
+        for host in ["127.0.0.0", "127.0.0.2", "127.1.2.3", "127.255.255.255"] {
+            assert_eq!(
+                LoopbackOrigin::parse(&format!("http://{host}:8790")),
+                Err(OriginError::NotLoopback),
+                "should reject {host}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_other_ipv4_loopback_addresses_https() {
+        for host in ["127.0.0.0", "127.0.0.2", "127.1.2.3", "127.255.255.255"] {
+            assert_eq!(
+                LoopbackOrigin::parse_https(&format!("https://{host}:8790")),
+                Err(OriginError::NotLoopback),
+                "should reject {host}"
+            );
+        }
     }
 
     #[test]
