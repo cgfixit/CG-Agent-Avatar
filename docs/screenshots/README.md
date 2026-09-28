@@ -1,22 +1,22 @@
 # Native screenshots
 
-These PNGs replace the README's externally hosted image. They are unedited
+These JPEGs replace the README's earlier screenshots. They are unedited
 app-window captures taken through Computer Use (`@oai/sky`), with no desktop,
 account details, credentials, or unrelated windows included.
 
 | Property | Capture |
 |---|---|
-| Date | September 21, 2026 |
-| Source revision | `7656bc3543bef66f881a2ad4672c30cb55a1e05d` (main at capture time) |
+| Date | September 27, 2026 |
+| Source revision | `a8fa9bcfd3aa4c4cdcc1e253d63d9b6e392a92db` (main) plus the reply-button contrast change in this branch |
 | Platform | Apple Silicon, macOS 27.0 (26A428) |
-| Build | `./scripts/package-app.sh`, Rust 1.88, ad-hoc signed |
-| Executable SHA-256 | `9b57de8d8d6123de099e1da5c517ca5111935014a3ae1d943ab3b52c8dad2618` |
+| Build | `./scripts/package-app.sh`, Rust 1.88 toolchain, ad-hoc signed |
+| Executable SHA-256 | `6ed614e4e598dbc80ec02df057daa0e50c324adafeb4e867ed9254645bb8fec5` |
 | Theme/backend | Classic / live Direct Ollama, fixed model tag `qwen3.8:27b-mlx` |
 | Harness home | Empty, isolated temporary directory |
-| Prompt | “Give me eight numbered steps for a calm coding session, about 700 characters in plain text.” |
+| Prompts | A five-step coding checklist in the compact capture; an eight-step debugging checklist in the expanded capture |
 
-- [`classic-reply.png`](classic-reply.png): completed reply in the compact bubble.
-- [`expanded-reply.png`](expanded-reply.png): the same reply after **See More**.
+- [`classic-reply.jpg`](classic-reply.jpg): completed five-step reply in the compact bubble.
+- [`expanded-reply.jpg`](expanded-reply.jpg): an eight-step reply after **See More**.
 
 The reply is live model output, so wording varies between runs. These images
 show native rendering and a working local chat request; they do not establish
@@ -34,7 +34,7 @@ every macOS version.
 4. Capture only the app window. Expand with **See More**, capture the second
    view, then check **See Less** restores the preview. For a longer reply,
    also verify scrolling and text selection after several animation frames.
-5. Review the pixels for legibility and private content, copy the original PNGs
+5. Review the pixels for legibility and private content, copy the original captures
    into this directory, and update the provenance table and README captions.
 
 Do not describe fixture responses as live-provider results. Screenshots and

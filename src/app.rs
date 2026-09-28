@@ -13,14 +13,14 @@ use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
     NSApplicationDelegate, NSBackingStoreType, NSButton, NSColor, NSCompositingOperation,
-    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont, NSImage, NSMenu, NSMenuItem,
-    NSPanel, NSScreen, NSScrollView, NSSecureTextField, NSSquareStatusItemLength, NSStatusBar,
-    NSStatusItem, NSStatusWindowLevel, NSTextField, NSTextView, NSView, NSWindowCollectionBehavior,
-    NSWindowStyleMask,
+    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont, NSForegroundColorAttributeName,
+    NSImage, NSMenu, NSMenuItem, NSPanel, NSScreen, NSScrollView, NSSecureTextField,
+    NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSTextField,
+    NSTextView, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    ns_string, MainThreadMarker, NSData, NSNotification, NSObject, NSObjectProtocol, NSPoint,
-    NSRect, NSSize, NSString, NSTimer,
+    ns_string, MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSNotification,
+    NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
 };
 
 use crate::client::{Client, ClientError, SessionJar};
@@ -632,7 +632,7 @@ impl Delegate {
                 NSButton::alloc(mtm),
                 NSRect::new(layout.button, NSSize::new(SEE_MORE_W, SEE_MORE_H)),
             );
-            button.setTitle(ns_string!("See More"));
+            set_reply_button_title(&button, ns_string!("See More"));
             unsafe {
                 button.setTarget(Some(self.as_ref()));
                 button.setAction(Some(sel!(toggleReply:)));
@@ -946,11 +946,14 @@ impl Delegate {
             }
             if let Some(button) = self.ivars().see_more.borrow().as_ref() {
                 button.setHidden(in_flight || presentation.raw.is_empty());
-                button.setTitle(if reply_expanded {
+                let title = if reply_expanded {
                     ns_string!("See Less")
                 } else {
                     ns_string!("See More")
-                });
+                };
+                if !button.title().isEqualToString(title) {
+                    set_reply_button_title(button, title);
+                }
             }
         }
     }
@@ -993,6 +996,16 @@ fn cw_offset(metrics: &theme::Metrics) -> f64 {
 
 fn ns_color(c: theme::Rgba) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(c.r, c.g, c.b, c.a)
+}
+
+fn set_reply_button_title(button: &NSButton, title: &NSString) {
+    let ink = ns_color(theme::CLASSIC.palette.text_color.unwrap());
+    let attrs: Retained<NSDictionary<_, AnyObject>> = NSDictionary::from_slices(
+        &[unsafe { NSForegroundColorAttributeName }],
+        &[ink.as_ref()],
+    );
+    let attributed = unsafe { NSAttributedString::new_with_attributes(title, &attrs) };
+    button.setAttributedTitle(&attributed);
 }
 
 /// The theme's ink, or the system's adaptive label color when the theme

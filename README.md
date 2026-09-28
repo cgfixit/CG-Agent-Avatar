@@ -9,10 +9,10 @@ Avatar starts in **Direct Ollama** mode. It can also chat through a local
 client: it sends chat requests, displays replies, and keeps its own network
 connections on loopback.
 
-![Classic theme with a compact reply, See More, and the message field](docs/screenshots/classic-reply.png)
+![Classic theme showing a concise live reply above the message field](docs/screenshots/classic-reply.jpg)
 
-*Classic theme, live Direct Ollama reply. Captured from the native app on
-September 21, 2026; [capture details](docs/screenshots/README.md).*
+*Classic theme with a live Direct Ollama reply, captured from the packaged
+macOS app in September 2026. [Capture details](docs/screenshots/README.md).*
 
 ## Get started
 
@@ -71,7 +71,7 @@ Click the creature or choose **Talk** from its menu-bar menu. Typing works even
 when a backend is unavailable. Return sends the message; `…thinking` remains
 visible until the non-streaming request completes.
 
-![Expanded native reply pane showing the complete demo answer and See Less](docs/screenshots/expanded-reply.png)
+![Expanded native reply pane showing a longer live answer and See Less](docs/screenshots/expanded-reply.jpg)
 
 **See More** expands the reply; **See Less** restores the compact bubble. Both
 backends share this renderer. The Classic bubble is 640×112 points; the expanded

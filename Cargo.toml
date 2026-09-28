@@ -24,7 +24,7 @@ url = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSObjCRuntime", "NSGeometry", "NSDate", "NSTimer", "NSRunLoop", "NSNotification", "NSThread", "NSData", "NSDictionary"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSAttributedString", "NSObjCRuntime", "NSGeometry", "NSDate", "NSTimer", "NSRunLoop", "NSNotification", "NSThread", "NSData", "NSDictionary"] }
 objc2-app-kit = { version = "0.3", features = [
     "NSApplication",
     "NSRunningApplication",
@@ -36,6 +36,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSView",
     "NSControl",
     "NSButton",
+    "NSAttributedString",
     "NSAlert",
     "NSSecureTextField",
     "NSStatusBar",
