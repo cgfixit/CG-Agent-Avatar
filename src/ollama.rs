@@ -177,11 +177,6 @@ impl Ollama {
         if status != 200 {
             return Err(http_error(status, resp));
         }
-        if let Some(len) = resp.content_length() {
-            if len > MAX_BODY {
-                return Err(OllamaError::ResponseTooLarge);
-            }
-        }
         let bytes = response_bytes(resp)?;
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| OllamaError::Json)?;
         let models = v
@@ -245,11 +240,6 @@ impl Ollama {
         if status != 200 {
             return Err(OllamaError::WebUnavailable { status });
         }
-        if let Some(len) = resp.content_length() {
-            if len > MAX_BODY {
-                return Err(OllamaError::ResponseTooLarge);
-            }
-        }
         response_bytes(resp)
     }
 
@@ -274,11 +264,6 @@ impl Ollama {
         }
         if status != 200 {
             return Err(http_error(status, resp));
-        }
-        if let Some(len) = resp.content_length() {
-            if len > MAX_BODY {
-                return Err(OllamaError::ResponseTooLarge);
-            }
         }
         let bytes = response_bytes(resp)?;
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| OllamaError::Json)?;
@@ -413,7 +398,14 @@ fn page_context(url: &Url, page: &WebPage) -> String {
     )
 }
 
+/// The one place a daemon body is read: a declared length over `MAX_BODY` is
+/// refused before any byte arrives, and an undeclared (chunked) body is cut
+/// off at the same cap. Error bodies take this path too, so a hostile
+/// daemon cannot make the error branch the unbounded one.
 fn response_bytes(resp: reqwest::blocking::Response) -> Result<Vec<u8>, OllamaError> {
+    if resp.content_length().is_some_and(|len| len > MAX_BODY) {
+        return Err(OllamaError::ResponseTooLarge);
+    }
     http::read_bounded(resp, MAX_BODY).map_err(|e| match e {
         ReadError::Io => OllamaError::Json,
         ReadError::TooLarge => OllamaError::ResponseTooLarge,
@@ -916,6 +908,47 @@ mod tests {
         assert_eq!(ctx.matches("https://e.com/").count(), SEARCH_RESULTS);
         assert!(ctx.contains(&format!("{}…", "x".repeat(RESULT_CHARS))));
         assert!(search_context("q", &[]).contains("No results."));
+    }
+
+    #[test]
+    fn oversized_bodies_are_refused_on_every_route() {
+        let big = "x".repeat(MAX_BODY as usize + 1);
+        let reply = format!(r#"{{"choices":[{{"message":{{"content":"{big}"}}}}]}}"#);
+        let mut server = mockito::Server::new();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(200)
+            .with_body(&reply)
+            .create();
+        let _tags = server
+            .mock("GET", GET_TAGS)
+            .with_status(200)
+            .with_body(format!(r#"{{"models":[{{"name":"{big}"}}]}}"#))
+            .create();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_status(200)
+            .with_body(format!(r#"{{"results":[{{"content":"{big}"}}]}}"#))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(o.chat("hi"), Err(OllamaError::ResponseTooLarge)));
+        assert!(matches!(o.tags_ok(), Err(OllamaError::ResponseTooLarge)));
+        assert!(matches!(
+            o.chat("look up x"),
+            Err(OllamaError::ResponseTooLarge)
+        ));
+        // An oversized *error* body is capped too, and the status still wins.
+        let mut server = mockito::Server::new();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(500)
+            .with_body(format!(r#"{{"error":"{big}"}}"#))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(
+            o.chat("hi"),
+            Err(OllamaError::Http { status: 500, ref detail }) if detail.is_empty()
+        ));
     }
 
     #[test]
