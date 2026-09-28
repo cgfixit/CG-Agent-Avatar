@@ -16,7 +16,13 @@ name = "cg-agent"
 path = "src/main.rs"
 
 [dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "cookies"] }
+# reqwest 0.13 with `rustls-no-provider`: reqwest's own `rustls` feature would
+# select aws-lc-rs (C/cmake toolchain, ~30 extra crates). Keeping `ring`, the
+# provider 0.12 used, means no change to what the app ships; `tls::ensure_crypto_provider`
+# installs it before any client is built. TLS pinning is `tls_certs_only`
+# (single leaf cert, no built-in or platform roots).
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls-no-provider", "cookies"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

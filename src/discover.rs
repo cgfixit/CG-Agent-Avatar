@@ -112,6 +112,7 @@ pub fn probe_harness(port: u16) -> bool {
     let Ok(url) = origin.url_for("/api/status") else {
         return false;
     };
+    crate::tls::ensure_crypto_provider();
     let Ok(http) = reqwest::blocking::Client::builder()
         .user_agent("cg-agent/0.1")
         .no_proxy()

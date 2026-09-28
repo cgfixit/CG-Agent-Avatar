@@ -45,8 +45,11 @@ cargo test --test source_contracts --test lsof_argv --test plist_contract --test
   treated as text or JSON - `Content-Length` alone is only an early rejection, not
   the real cap.
 - Harness TLS: the HTTPS client pins exactly one certificate, read fresh from the
-  harness's own home (`tls/server.pem`) on each probe, with `tls_built_in_root_certs(false)`
-  and never `danger_accept_invalid_certs`. A certificate mismatch must surface as its
+  harness's own home (`tls/server.pem`) on each probe, with `tls_certs_only` (a root
+  store of just that certificate) and never `tls_certs_merge` or
+  `danger_accept_invalid_certs`. Every `reqwest` builder calls
+  `tls::ensure_crypto_provider()` first; `reqwest` runs with `rustls-no-provider`, and
+  `ring` is the only provider this crate installs. A certificate mismatch must surface as its
   own distinct error - never a silent fallback to plain HTTP.
 - `home.rs`: `CGAGENTHARNESS_HOME` is honored only when it's an absolute path with no
   `..` components (`is_safe_home`); `harness.json` and `tls/server.pem` reads both

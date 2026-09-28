@@ -63,6 +63,11 @@ Cargo Deny's advisory fetch is a separate operation; `cargo deny --offline
 | Secret scan | Run Gitleaks separately | Pinned Gitleaks with archive checksum verification |
 | Native interaction/screenshots | Manual Computer Use on the built app | Not covered by hosted unit tests |
 
+The TLS stack is `reqwest` 0.13 on rustls with the `ring` crypto provider,
+selected by `src/tls.rs` through reqwest's `rustls-no-provider` feature. That keeps
+the build pure Rust: reqwest's default `rustls` feature would compile `aws-lc-rs`,
+which needs cmake and a C toolchain on every CI leg and in `package-app.sh`.
+
 All dependency-resolving build/test commands use `--locked`. Review intentional
 updates to `Cargo.toml` and `Cargo.lock` together, then rerun checks; a passing
 locked build verifies the committed resolution, not that every crate is the

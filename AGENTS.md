@@ -75,6 +75,11 @@ layer that can hold it.
   `discover.rs`, and `ollama.rs`.
 
 **Layer 2: backend I/O (blocking `reqwest`, no async runtime)**
+- **`tls.rs`**: installs `ring` as the process-wide rustls crypto provider, once.
+  `reqwest` runs with `rustls-no-provider` (its `rustls` feature would pull in
+  `aws-lc-rs` and a C toolchain), and it panics in `Client::build()` without a
+  provider, so every builder in `client.rs`, `ollama.rs`, and `discover.rs` calls
+  `tls::ensure_crypto_provider()` first.
 - **`client.rs`**: the Harness `Client`:
   - guarded POSTs carry `X-CyClaw-CSRF`, never send `"loop"`, and refuse redirects;
   - it handles login and self password-change for `auth.enabled: true` homes;
@@ -134,8 +139,9 @@ layer that can hold it.
    entry in `src/paths.rs` (or `ollama.rs`'s `ALLOWED`), a row in `SECURITY.md`, and
    a contract test. Never call anything in `paths::FORBIDDEN`.
 3. **Never weaken a control to get green.** This covers redirect refusal,
-   single-cert TLS pinning (`tls_built_in_root_certs(false)`, never
-   `danger_accept_invalid_certs`), the `MAX_BODY` cap, CSRF on guarded POSTs,
+   single-cert TLS pinning (`tls_certs_only`, never `tls_certs_merge` or
+   `danger_accept_invalid_certs`), the `ring` crypto provider installed by
+   `tls.rs`, the `MAX_BODY` cap, CSRF on guarded POSTs,
    argv-only `lsof`, and asymmetric timeouts. Fix the regression, never the test.
 4. **No secrets.** Never read `.env` or `CGAGENTHARNESS_API_KEY`. Never persist
    credentials or cookies, and never log the CSRF token or request bodies.
