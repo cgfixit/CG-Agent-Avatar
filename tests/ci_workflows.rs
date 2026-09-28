@@ -163,6 +163,74 @@ fn all_workflows() -> [(&'static str, &'static str); 4] {
     ]
 }
 
+/// YAML with comment lines removed, so prose like "# contents: write only on
+/// the release job" never satisfies or trips a contract.
+fn yaml_without_comments(yml: &str) -> String {
+    yml.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .map(|line| line.split(" # ").next().unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn every_action_is_pinned_to_a_full_commit_sha() {
+    // A tag or branch ref can be moved by the action's maintainer (or an
+    // attacker with their credentials); a 40-hex commit SHA cannot.
+    for (name, yml) in all_workflows() {
+        let mut pinned = 0;
+        for line in yml.lines() {
+            let Some(action) = line.trim_start().strip_prefix("uses: ") else {
+                continue;
+            };
+            let (_, at) = action
+                .split_once('@')
+                .unwrap_or_else(|| panic!("{name}: action without a ref: {line}"));
+            let sha = at.split_whitespace().next().unwrap_or_default();
+            assert!(
+                sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{name}: not pinned to a full commit SHA: {line}"
+            );
+            assert!(
+                at.contains("# v"),
+                "{name}: SHA pin needs a trailing version comment for Dependabot and reviewers: {line}"
+            );
+            pinned += 1;
+        }
+        assert!(pinned > 0, "{name}: no actions found");
+    }
+}
+
+#[test]
+fn workflow_tokens_are_read_only_except_the_release_job() {
+    for (name, yml) in all_workflows() {
+        let body = yaml_without_comments(yml);
+        assert!(
+            body.contains("\npermissions:\n  contents: read\n"),
+            "{name}: top-level permissions must be exactly contents: read"
+        );
+        assert!(
+            !body.contains("pull_request_target"),
+            "{name}: pull_request_target runs fork code with the base repo's token"
+        );
+        assert!(
+            body.contains("\nconcurrency:\n"),
+            "{name}: missing a concurrency group"
+        );
+        assert!(!body.contains("write-all"), "{name}: blanket write token");
+        let writes = body.matches(": write").count();
+        if name == "bundle.yml" {
+            assert_eq!(
+                writes, 1,
+                "{name}: only the release job may write, and only contents"
+            );
+            assert!(body.contains("    permissions:\n      contents: write\n"));
+        } else {
+            assert_eq!(writes, 0, "{name}: no job may hold a write scope");
+        }
+    }
+}
+
 #[test]
 fn stable_leg_really_runs_stable() {
     // rust-toolchain.toml outranks rustup's default toolchain, so installing
