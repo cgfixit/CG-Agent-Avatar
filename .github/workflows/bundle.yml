@@ -24,6 +24,7 @@ concurrency:
 jobs:
   package:
     runs-on: macos-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -60,6 +61,7 @@ jobs:
     needs: package
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
