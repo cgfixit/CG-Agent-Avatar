@@ -67,9 +67,11 @@ report the drift and don't edit anything.
    table, and the CLAUDE.md pointer all cover every doc and every skill that exists,
    and nothing that doesn't.
 6. **Validate.** Docs have no build step, and no test reads the Markdown docs.
-   Contract tests do `include_str!` workflows, scripts, `Info.plist`, and source
-   files, so run them whenever a doc fix also required touching one of those. Also
-   run them to confirm that the doc's claims about those files still hold:
+   Contract tests discover workflow files from `.github/workflows` at test time
+   (some tests still `include_str!` one named workflow) and `include_str!`
+   scripts, `Info.plist`, and source files, so run them whenever a doc fix also
+   required touching one of those. Also run them to confirm that the doc's
+   claims about those files still hold:
 
    ```sh
    cargo test --locked --test source_contracts --test ci_workflows --test plist_contract

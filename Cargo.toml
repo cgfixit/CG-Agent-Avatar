@@ -73,6 +73,9 @@ objc2-core-graphics = { version = "0.3", features = ["CGColor", "CGImage", "CGCo
 [dev-dependencies]
 mockito = "1"
 tempfile = "3"
+# Dev-only YAML 1.2 parser for workflow contract tests. Default `encoding`
+# feature pulls encoding_rs, which these UTF-8 fixtures never need.
+yaml-rust2 = { version = "0.13.0", default-features = false }
 
 [profile.release]
 strip = true
