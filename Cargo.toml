@@ -16,6 +16,10 @@ name = "cg-agent"
 path = "src/main.rs"
 
 [dependencies]
+# reqwest 0.13 replaces `tls_built_in_root_certs(false)` with `tls_certs_only` and
+# moves the rustls crypto provider to aws-lc-rs (C build via cmake). Keeping 0.12
+# until that migration is reviewed with the pinning control on macOS CI; see
+# docs/BUILD.md.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "cookies"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

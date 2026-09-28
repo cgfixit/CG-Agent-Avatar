@@ -215,6 +215,22 @@ impl Client {
         Self::new(LoopbackOrigin::from_port(port))
     }
 
+    /// The same HTTP client (TLS trust, cookie jar, timeouts) pointed at
+    /// another loopback origin of the same scheme. Discovery probes several
+    /// candidate ports with one pinned client instead of building, and
+    /// re-parsing the certificate for, a client per candidate. The console
+    /// CSRF token is per harness process, so the copy starts without one.
+    pub(crate) fn rebind(&self, origin: LoopbackOrigin) -> Result<Self, ClientError> {
+        if origin.is_https() != self.origin.is_https() {
+            return Err(ClientError::SchemeMismatch);
+        }
+        Ok(Self {
+            origin,
+            http: self.http.clone(),
+            csrf: None,
+        })
+    }
+
     pub fn origin(&self) -> &LoopbackOrigin {
         &self.origin
     }
@@ -913,6 +929,19 @@ mod tests {
         ));
         assert!(matches!(
             Client::new_https(LoopbackOrigin::from_port(8790), b"not a cert"),
+            Err(ClientError::SchemeMismatch)
+        ));
+    }
+
+    #[test]
+    fn rebind_keeps_the_scheme_and_drops_the_console_token() {
+        let mut c = Client::new(LoopbackOrigin::from_port(8790)).unwrap();
+        c.csrf = Some("tok12345".into());
+        let moved = c.rebind(LoopbackOrigin::from_port(8791)).unwrap();
+        assert_eq!(moved.origin().as_str(), "http://127.0.0.1:8791");
+        assert!(moved.csrf.is_none());
+        assert!(matches!(
+            c.rebind(LoopbackOrigin::from_port_https(8791)),
             Err(ClientError::SchemeMismatch)
         ));
     }

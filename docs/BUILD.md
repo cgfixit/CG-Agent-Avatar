@@ -70,6 +70,15 @@ newest published version. Run `cargo update --dry-run` to check whether newer
 compatible versions would change the lockfile without editing it. Dependabot
 checks Cargo and Actions weekly.
 
+`reqwest` stays on 0.12 on purpose. 0.13 removes `tls_built_in_root_certs`,
+which the pinned-certificate client uses to trust nothing but the harness's
+own leaf, in favor of `tls_certs_only`, and its `rustls` feature switches the
+crypto provider from `ring` to `aws-lc-rs`, a C build that wants CMake.
+Moving needs the pinning control re-verified on macOS CI and a decision on the
+provider (`rustls-no-provider` plus an explicitly installed `ring` provider
+keeps the current crypto), so Dependabot ignores that major and the upgrade is
+a reviewed change of its own.
+
 ## Backend setup
 
 Direct Ollama is selected on launch. Avatar expects a local service on
