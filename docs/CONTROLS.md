@@ -5,7 +5,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Input | Action |
 |---|---|
 | **Talk** | Show the strip, focus the text field (works offline) |
-| **Harness (127.0.0.1:8790)** | Optional. Launches the bundled `CG Agent Harness.app` (by bundle identifier) if it isn't already running, then tries the configured port (8790 by default) and finds the desktop `.app` sidecar on `127.0.0.1`; HTTPS with a pinned certificate on fresh homes, plain HTTP on legacy homes |
+| **Harness (127.0.0.1:8790)** | Optional. Launches or activates the installed `CG Agent Harness.app` by bundle identifier, then checks the configured port and desktop sidecar for a confirmed status response; HTTPS with a pinned certificate on fresh homes, plain HTTP on legacy homes |
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message via `http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password (native secure text entry), then logs in for later Harness chats |
 | **Harness Password Reset…** | After logging in with a bootstrap password, securely replaces only that authenticated account's password |
@@ -15,9 +15,11 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | `search the web for …`, `look up …`, `google …` | Direct Ollama runs one web search first, then answers from the results. See [Web lookups](#web-lookups-direct-ollama) |
 | `read <link>`, `summarize <link>` | Direct Ollama reads that one public page first, then answers from it |
 | **See More** | Expand a reply into a scrollable pane; **See Less** collapses it |
-| Harness/Ollama down | Field still types. Bubble says `harness asleep` / `ollama asleep` |
-| Harness found, not logged in | Bubble says `login required — use Harness Login… in the menu` |
+| Harness/Ollama down | Field still types. Bubble says `waiting for Harness on loopback…` / `ollama asleep` |
+| Harness found, not logged in | Bubble says `Harness ready — use Harness Login… in the menu` |
 | Harness needs a password change | Bubble says `bootstrap password must be changed — use Harness Password Reset…` |
+| Harness model, provider, or key unavailable | Bubble asks you to configure them in Harness; Return leaves the typed text in the field |
+| Harness status usable | Bubble says `Harness ready — type below, Return to send` |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust` |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Bubble appends a compact `[via web ×N]` note. For Harness, N counts Harness's own web tool calls. For Direct Ollama it is `×1`, the lookup you asked for. Avatar never fetches pages itself |
@@ -30,11 +32,13 @@ non-thinking sampling, so replies arrive sooner. Harness uses a server-side sess
 after trimming, rejects NUL characters, and leaves invalid input unsent.
 This is a character limit, not a token-context setting.
 
-Harness Login and Password Reset do not select a chat backend: choose
-**Harness (127.0.0.1:8790)** before sending a Harness message. Wait for login
-success before choosing Password Reset. The reset requires the current password;
-the new-password prompt's **OK** submits the change. **Cancel** does not change
-the password. Account sessions last only for the running Avatar process.
+Harness Login and Password Reset do not select a chat backend. Select
+**Harness (127.0.0.1:8790)** and wait for the bubble's login prompt before
+entering credentials. If Harness requires a bootstrap password change, use
+**Harness Password Reset…** after login. The reset requires the current password;
+the new-password prompt's **OK** submits the change. **Cancel** leaves it
+unchanged. Avatar checks status again before enabling chat. Account sessions
+last only for the running Avatar process.
 
 The overlay follows the creature but only covers the creature, bubble, and text field. Clicks elsewhere in that horizontal band go to the app underneath.
 

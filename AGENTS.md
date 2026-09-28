@@ -106,6 +106,9 @@ layer that can hold it.
   Launch Services. There is never a hardcoded path, a spawned process, or arguments.
 
 **Layer 3: portable UI state (no AppKit)**
+- **`harness_setup.rs`**: typed Harness setup phases. A pinned loopback status
+  response, login result, and required password change advance the guide;
+  generation checks discard results from earlier backend selections.
 - **`mood.rs`**: pure `Mood` derivation (Asleep/Idle/Thinking/Talking/Sick) from
   backend status and in-flight chat state.
 - **`theme.rs`**: design tokens (layout, motion, color, type). `CLASSIC` is the

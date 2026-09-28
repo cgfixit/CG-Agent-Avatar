@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -23,9 +23,10 @@ use objc2_foundation::{
     NSRect, NSSize, NSString, NSTimer,
 };
 
-use crate::client::{Client, ClientError, SessionJar};
+use crate::client::{Client, ClientError, SessionJar, Status};
 use crate::discover;
 use crate::display;
+use crate::harness_setup::{Guide, Phase};
 use crate::home;
 use crate::mood::{self, Health, Mood};
 use crate::ollama::{self, Ollama, OllamaError};
@@ -47,19 +48,14 @@ const MOOD_EVERY: Duration = Duration::from_millis(250);
 struct Shared {
     mood: Mutex<Mood>,
     last_reply: Mutex<String>,
-    pending: Mutex<Option<String>>,
-    pending_login: Mutex<Option<(String, String)>>,
-    pending_password_change: Mutex<Option<(String, String)>>,
+    pending: Mutex<Option<(u8, u64, String)>>,
+    pending_login: Mutex<Option<(u64, String, String)>>,
+    pending_password_change: Mutex<Option<(u64, String, String)>>,
     in_flight: AtomicBool,
     talking: AtomicBool,
     click: AtomicBool,
     backend: AtomicU8,
-    port: AtomicU16,
-    /// Whether the current harness `port` was last confirmed reachable over
-    /// HTTPS (fresh homes) rather than plain HTTP (legacy `tls.enabled:
-    /// false` homes). Read by both the status and chat worker threads so
-    /// they agree on which `Client` constructor to use.
-    scheme_https: AtomicBool,
+    guide: Mutex<Guide>,
     /// One in-memory cookie jar for every harness client, so the status
     /// check sees the chat worker's login instead of the pre-login view.
     jar: Arc<SessionJar>,
@@ -684,9 +680,14 @@ impl Delegate {
     }
 
     fn set_backend(&self, backend: u8) {
-        self.ivars().shared.backend.store(backend, Ordering::SeqCst);
-        self.ivars().walk.borrow_mut().reply_expanded = false;
+        let shared = &self.ivars().shared;
         let harness_on = backend == BACKEND_HARNESS;
+        shared.guide.lock().unwrap().select(harness_on);
+        shared.backend.store(backend, Ordering::SeqCst);
+        shared.in_flight.store(false, Ordering::SeqCst);
+        shared.talking.store(false, Ordering::SeqCst);
+        shared.repoll.store(true, Ordering::SeqCst);
+        self.ivars().walk.borrow_mut().reply_expanded = false;
         if let Some(h) = self.ivars().harness_item.borrow().as_ref() {
             h.setState(if harness_on {
                 NSControlStateValueOn
@@ -701,24 +702,25 @@ impl Delegate {
                 NSControlStateValueOn
             });
         }
-        let note = if harness_on {
-            "harness mode — needs serve :8790 for replies"
-        } else {
-            "direct ollama — qwen3.8:27b-mlx on :11434"
-        };
+        let note = shared.guide.lock().unwrap().phase().guidance();
         *self.ivars().shared.last_reply.lock().unwrap() = note.into();
         self.open_talk();
     }
 
-    /// Two sequential modal prompts (username, then password) rather than
-    /// one combined accessory view — smaller surface to get wrong, and this
-    /// is a rarely-used flow. Credentials are handed to the chat worker
-    /// thread rather than sent from here: `Client::login` is a blocking
-    /// network call and must not run on the main/UI thread, and it must
-    /// reuse the exact same `Client` (and its cookie jar) the chat thread
-    /// already owns so the resulting session actually applies to later
-    /// chats.
+    /// Login runs on the chat worker because it is a blocking network call.
+    /// That worker also owns the client and cookie jar used for later chats.
     fn prompt_harness_login(&self) {
+        let (generation, endpoint) = {
+            let guide = self.ivars().shared.guide.lock().unwrap();
+            let generation = guide.generation();
+            (generation, guide.endpoint(generation))
+        };
+        if endpoint.is_none() {
+            let guidance = self.ivars().shared.guide.lock().unwrap().phase().guidance();
+            *self.ivars().shared.last_reply.lock().unwrap() = guidance.into();
+            self.open_talk();
+            return;
+        }
         let mtm = self.mtm();
         let Some(username) = Self::prompt_plain_text(mtm, "Harness Login", "Username") else {
             return;
@@ -729,15 +731,23 @@ impl Delegate {
         if username.trim().is_empty() || password.is_empty() {
             return;
         }
-        *self.ivars().shared.pending_login.lock().unwrap() = Some((username, password));
+        *self.ivars().shared.pending_login.lock().unwrap() = Some((generation, username, password));
         *self.ivars().shared.last_reply.lock().unwrap() = "logging in…".into();
         self.open_talk();
     }
 
     /// The harness permits an account flagged for bootstrap replacement to
-    /// change only its own password. Keep this rare flow as two native secure
-    /// prompts and hand the blocking request to the existing chat worker.
+    /// change only its own password. The request runs on the chat worker.
     fn prompt_harness_password_reset(&self) {
+        let generation = {
+            let guide = self.ivars().shared.guide.lock().unwrap();
+            if !matches!(guide.phase(), Phase::Reset(_)) {
+                *self.ivars().shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                self.open_talk();
+                return;
+            }
+            guide.generation()
+        };
         let mtm = self.mtm();
         let Some(current_password) =
             Self::prompt_secure_text(mtm, "Harness Password Reset", "Current password")
@@ -758,7 +768,7 @@ impl Delegate {
             return;
         }
         *self.ivars().shared.pending_password_change.lock().unwrap() =
-            Some((current_password, password));
+            Some((generation, current_password, password));
         *self.ivars().shared.last_reply.lock().unwrap() = "changing password…".into();
         self.open_talk();
     }
@@ -840,7 +850,21 @@ impl Delegate {
         let Ok(trimmed) = validate::message(&value) else {
             return;
         };
-        *self.ivars().shared.pending.lock().unwrap() = Some(trimmed.to_string());
+        let backend = self.ivars().shared.backend.load(Ordering::SeqCst);
+        let generation = if backend == BACKEND_HARNESS {
+            let guide = self.ivars().shared.guide.lock().unwrap();
+            let generation = guide.generation();
+            if guide.ready_endpoint(generation).is_none() {
+                *self.ivars().shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                self.open_talk();
+                return;
+            }
+            generation
+        } else {
+            self.ivars().shared.guide.lock().unwrap().generation()
+        };
+        *self.ivars().shared.pending.lock().unwrap() =
+            Some((backend, generation, trimmed.to_string()));
         self.ivars().walk.borrow_mut().reply_expanded = false;
         field.setStringValue(ns_string!(""));
         self.open_talk();
@@ -1031,7 +1055,21 @@ fn build_harness_client(
 /// pinned certificate changes, so a healthy check is one request.
 struct StatusClient {
     cert: Option<Vec<u8>>,
+    endpoint: discover::Reachable,
     client: Client,
+}
+
+enum HarnessProbe {
+    Confirmed(discover::Reachable, Status),
+    RateLimited,
+    Unavailable,
+}
+
+fn endpoint_parts(endpoint: discover::Reachable) -> (u16, bool) {
+    match endpoint {
+        discover::Reachable::Http(port) => (port, false),
+        discover::Reachable::Https(port) => (port, true),
+    }
 }
 
 fn ollama_health(ollama: Option<&Ollama>) -> Health {
@@ -1049,31 +1087,17 @@ fn ollama_health(ollama: Option<&Ollama>) -> Health {
     }
 }
 
-fn harness_health(
+fn harness_probe(
     cache: &mut Option<StatusClient>,
     preferred: u16,
     home_dir: &std::path::Path,
     shared: &Shared,
-    last: &Health,
-) -> Health {
-    let from_status = |s: crate::client::Status| {
-        if s.model.is_empty() {
-            // The thin, pre-login shape: the harness is there, not usable yet.
-            Health::Sick
-        } else {
-            Health::Ready {
-                api_key_optional: s.api_key_optional,
-                model: s.model,
-                provider: s.provider,
-            }
-        }
-    };
+) -> HarnessProbe {
     let cert = home::read_pinned_cert(home_dir);
     if let Some(cached) = cache.as_ref().filter(|c| c.cert == cert) {
         match cached.client.status() {
-            // Something other than a harness can take over a freed port.
-            Ok(s) if !s.model.is_empty() || s.auth_enabled => return from_status(s),
-            Err(ClientError::RateLimited) => return last.clone(),
+            Ok(status) => return HarnessProbe::Confirmed(cached.endpoint, status),
+            Err(ClientError::RateLimited) => return HarnessProbe::RateLimited,
             _ => {}
         }
     }
@@ -1081,25 +1105,23 @@ fn harness_health(
     // Re-probe (https first, then legacy http, across the lsof candidates)
     // only when the cached connection stopped answering as a harness.
     let Some(reachable) = discover::resolve_reachable(preferred, cert.as_deref()) else {
-        return Health::Asleep;
+        return HarnessProbe::Unavailable;
     };
-    let (port, https) = match reachable {
-        discover::Reachable::Http(p) => (p, false),
-        discover::Reachable::Https(p) => (p, true),
-    };
-    shared.port.store(port, Ordering::SeqCst);
-    shared.scheme_https.store(https, Ordering::SeqCst);
+    let (port, https) = endpoint_parts(reachable);
     let Some(client) = build_harness_client(port, https, cert.as_deref(), &shared.jar) else {
-        return Health::Asleep;
+        return HarnessProbe::Unavailable;
     };
-    let health = match client.status() {
-        Ok(s) => from_status(s),
-        Err(ClientError::Unreachable) => Health::Asleep,
-        Err(ClientError::RateLimited) => last.clone(),
-        Err(_) => Health::Sick,
+    let probe = match client.status() {
+        Ok(status) => HarnessProbe::Confirmed(reachable, status),
+        Err(ClientError::RateLimited) => HarnessProbe::RateLimited,
+        Err(_) => HarnessProbe::Unavailable,
     };
-    *cache = Some(StatusClient { cert, client });
-    health
+    *cache = Some(StatusClient {
+        cert,
+        endpoint: reachable,
+        client,
+    });
+    probe
 }
 
 fn preview_text(reply: &str, in_flight: bool) -> String {
@@ -1142,7 +1164,6 @@ fn expanded_reply_heights(text: &str, metrics: &theme::Metrics) -> (f64, f64) {
 fn spawn_workers(shared: Arc<Shared>) {
     let home_dir = home::default_home();
     let preferred = home::port_from_home(&home_dir);
-    shared.port.store(preferred, Ordering::SeqCst);
     let status_ollama = Ollama::new().ok();
     std::thread::Builder::new()
         .name("cg-agent-status".into())
@@ -1158,10 +1179,47 @@ fn spawn_workers(shared: Arc<Shared>) {
                     let due = shared.repoll.swap(false, Ordering::SeqCst)
                         || polled.is_none_or(|(b, at)| b != backend || at.elapsed() >= POLL_EVERY);
                     if due {
+                        if polled.is_some_and(|(previous, _)| previous != backend) {
+                            health = Health::Asleep;
+                        }
                         health = if backend == BACKEND_OLLAMA {
                             ollama_health(status_ollama.as_ref())
                         } else {
-                            harness_health(&mut cache, preferred, &home_dir, &shared, &health)
+                            let generation = shared.guide.lock().unwrap().generation();
+                            let probe = harness_probe(&mut cache, preferred, &home_dir, &shared);
+                            let mut guide = shared.guide.lock().unwrap();
+                            if !guide.current(generation) {
+                                Health::Asleep
+                            } else {
+                                let next = match probe {
+                                    HarnessProbe::Confirmed(endpoint, status) => {
+                                        let changed =
+                                            guide.observe(generation, Some((endpoint, &status)));
+                                        if changed {
+                                            *shared.last_reply.lock().unwrap() =
+                                                guide.phase().guidance().into();
+                                        }
+                                        if matches!(guide.phase(), Phase::Ready(_)) {
+                                            Health::Ready {
+                                                api_key_optional: status.api_key_optional,
+                                                model: status.model,
+                                                provider: status.provider,
+                                            }
+                                        } else {
+                                            Health::Sick
+                                        }
+                                    }
+                                    HarnessProbe::RateLimited => health.clone(),
+                                    HarnessProbe::Unavailable => {
+                                        if guide.observe(generation, None) {
+                                            *shared.last_reply.lock().unwrap() =
+                                                guide.phase().guidance().into();
+                                        }
+                                        Health::Asleep
+                                    }
+                                };
+                                next
+                            }
                         };
                         polled = Some((backend, Instant::now()));
                     }
@@ -1195,69 +1253,104 @@ fn spawn_workers(shared: Arc<Shared>) {
                             .unwrap()
                             .take()
                     };
-                    if let Some((current_password, password)) = password_change {
-                        match harness.as_mut() {
-                            Some(client) => match client.change_password(&current_password, &password) {
-                                Ok(()) => {
-                                    session = None;
-                                    shared.repoll.store(true, Ordering::SeqCst);
-                                    *shared.last_reply.lock().unwrap() =
-                                        "password changed — ready to chat".into();
+                    if let Some((generation, current_password, password)) = password_change {
+                        let endpoint = shared.guide.lock().unwrap().reset_endpoint(generation);
+                        if let Some(endpoint) = endpoint {
+                            let (port, https) = endpoint_parts(endpoint);
+                            if port != last_port || https != last_https || harness.is_none() {
+                                let cert = home::read_pinned_cert(&home_dir);
+                                harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
+                                session = None;
+                                last_port = port;
+                                last_https = https;
+                            }
+                            let result = harness.as_mut().ok_or(ClientError::Unreachable)
+                                .and_then(|client| client.change_password(&current_password, &password));
+                            let mut guide = shared.guide.lock().unwrap();
+                            if guide.current(generation) {
+                                match result {
+                                    Ok(()) if guide.password_changed(generation) => {
+                                        session = None;
+                                        shared.repoll.store(true, Ordering::SeqCst);
+                                        *shared.last_reply.lock().unwrap() =
+                                            "password changed — verifying Harness…".into();
+                                    }
+                                    Err(e) => {
+                                        *shared.last_reply.lock().unwrap() =
+                                            format!("password reset failed: {e}");
+                                    }
+                                    _ => {}
                                 }
-                                Err(e) => {
-                                    *shared.last_reply.lock().unwrap() =
-                                        format!("password reset failed: {e}");
-                                }
-                            },
-                            None => {
-                                *shared.last_reply.lock().unwrap() =
-                                    "log in to Harness before changing its password".into();
                             }
                         }
                     }
                     let login = { shared.pending_login.lock().unwrap().take() };
-                    if let Some((username, password)) = login {
-                        let port = shared.port.load(Ordering::SeqCst);
-                        let https = shared.scheme_https.load(Ordering::SeqCst);
-                        if port != last_port || https != last_https || harness.is_none() {
-                            let cert = home::read_pinned_cert(&home_dir);
-                            harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
-                            session = None;
-                            last_port = port;
-                            last_https = https;
-                        }
-                        match harness.as_mut() {
-                            Some(client) => match client.login(&username, &password) {
-                                Ok(info) if info.must_change_password => {
-                                    *shared.last_reply.lock().unwrap() =
-                                        "logged in — use Harness Password Reset… before chatting".into();
+                    if let Some((generation, username, password)) = login {
+                        let endpoint = shared.guide.lock().unwrap().endpoint(generation);
+                        if let Some(endpoint) = endpoint {
+                            let (port, https) = endpoint_parts(endpoint);
+                            if port != last_port || https != last_https || harness.is_none() {
+                                let cert = home::read_pinned_cert(&home_dir);
+                                harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
+                                session = None;
+                                last_port = port;
+                                last_https = https;
+                            }
+                            let result = harness.as_mut().ok_or(ClientError::Unreachable)
+                                .and_then(|client| client.login(&username, &password));
+                            let mut guide = shared.guide.lock().unwrap();
+                            if guide.current(generation) {
+                                match result {
+                                    Ok(info) if guide.login_result(generation, info.must_change_password) => {
+                                        session = None;
+                                        if !info.must_change_password {
+                                            shared.repoll.store(true, Ordering::SeqCst);
+                                        }
+                                        *shared.last_reply.lock().unwrap() = if info.must_change_password {
+                                            guide.phase().guidance().into()
+                                        } else {
+                                            format!("logged in as {} — verifying Harness…", info.username)
+                                        };
+                                    }
+                                    Err(e) => {
+                                        *shared.last_reply.lock().unwrap() = format!("login failed: {e}");
+                                    }
+                                    _ => {}
                                 }
-                                Ok(info) => {
-                                    session = None;
-                                    shared.repoll.store(true, Ordering::SeqCst);
-                                    *shared.last_reply.lock().unwrap() =
-                                        format!("logged in as {}", info.username);
-                                }
-                                Err(e) => {
-                                    *shared.last_reply.lock().unwrap() = format!("login failed: {e}");
-                                }
-                            },
-                            None => {
-                                *shared.last_reply.lock().unwrap() = "harness asleep".into();
                             }
                         }
                     }
 
                     let msg = { shared.pending.lock().unwrap().take() };
-                    if let Some(message) = msg {
+                    if let Some((backend, generation, message)) = msg {
+                        if shared.backend.load(Ordering::SeqCst) != backend
+                            || shared.guide.lock().unwrap().generation() != generation
+                        {
+                            continue;
+                        }
+                        let endpoint = if backend == BACKEND_HARNESS {
+                            let guide = shared.guide.lock().unwrap();
+                            let Some(endpoint) = guide.ready_endpoint(generation) else {
+                                *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                continue;
+                            };
+                            Some(endpoint)
+                        } else {
+                            None
+                        };
                         shared.in_flight.store(true, Ordering::SeqCst);
                         shared.talking.store(false, Ordering::SeqCst);
-                        let backend = shared.backend.load(Ordering::SeqCst);
                         if backend == BACKEND_OLLAMA {
                             let result = ollama
                                 .as_ref()
                                 .ok_or(OllamaError::Unreachable)
                                 .and_then(|o| o.chat(&message));
+                            if shared.backend.load(Ordering::SeqCst) != backend
+                                || shared.guide.lock().unwrap().generation() != generation
+                            {
+                                shared.in_flight.store(false, Ordering::SeqCst);
+                                continue;
+                            }
                             match result {
                                 Ok(reply) => {
                                     *shared.last_reply.lock().unwrap() = reply;
@@ -1276,11 +1369,10 @@ fn spawn_workers(shared: Arc<Shared>) {
                             }
                         } else {
                             let result = (|| {
-                                let port = shared.port.load(Ordering::SeqCst);
-                                let https = shared.scheme_https.load(Ordering::SeqCst);
+                                let (port, https) = endpoint_parts(endpoint.unwrap());
                                 if port != last_port || https != last_https || harness.is_none() {
                                     let cert = home::read_pinned_cert(&home_dir);
-                            harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
+                                    harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
                                     session = None;
                                     last_port = port;
                                     last_https = https;
@@ -1307,6 +1399,11 @@ fn spawn_workers(shared: Arc<Shared>) {
                             ) {
                                 harness = None;
                             }
+                            let mut guide = shared.guide.lock().unwrap();
+                            if !guide.current(generation) {
+                                shared.in_flight.store(false, Ordering::SeqCst);
+                                continue;
+                            }
                             match result {
                                 Ok(reply) => {
                                     let mut text = reply.reply;
@@ -1325,12 +1422,12 @@ fn spawn_workers(shared: Arc<Shared>) {
                                         "busy — wait a beat".into();
                                 }
                                 Err(ClientError::LoginRequired) => {
-                                    *shared.last_reply.lock().unwrap() =
-                                        "login required — use Harness Login… in the menu".into();
+                                    guide.auth_required(generation, false);
+                                    *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
                                 }
                                 Err(ClientError::PasswordChangeRequired) => {
-                                    *shared.last_reply.lock().unwrap() =
-                                        "bootstrap password must be changed — use Harness Password Reset…".into();
+                                    guide.auth_required(generation, true);
+                                    *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
                                 }
                                 Err(ClientError::CertMismatch) => {
                                     *shared.last_reply.lock().unwrap() =
@@ -1376,8 +1473,7 @@ pub fn run() {
         talking: AtomicBool::new(false),
         click: AtomicBool::new(false),
         backend: AtomicU8::new(DEFAULT_BACKEND),
-        port: AtomicU16::new(home::DEFAULT_PORT),
-        scheme_https: AtomicBool::new(false),
+        guide: Mutex::new(Guide::default()),
         jar: Arc::default(),
         repoll: AtomicBool::new(false),
     });
