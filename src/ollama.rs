@@ -5,6 +5,7 @@
 //! read through the local daemon's experimental web routes first and hands
 //! the result to the model as untrusted reference text.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use crate::display;
@@ -377,13 +378,14 @@ fn search_context(query: &str, results: &[WebResult]) -> String {
         out.push_str("No results.\n");
     }
     for (i, r) in results.iter().take(SEARCH_RESULTS).enumerate() {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n[{}] {}\n{}\n{}\n",
             i + 1,
             one_line(&r.title, 200),
             one_line(&r.url, 500),
             untrusted(&r.content, RESULT_CHARS)
-        ));
+        );
     }
     out.push_str("</web_results>");
     out
