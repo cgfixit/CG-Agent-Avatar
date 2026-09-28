@@ -1199,6 +1199,14 @@ fn expanded_reply_heights(text: &str, metrics: &theme::Metrics) -> (f64, f64) {
     (full.min(MAX_EXPANDED_REPLY_H), full)
 }
 
+// ponytail: auth waits delay expiry; use the status worker if strict timing is needed.
+fn expire_talking(deadline: &mut Option<Instant>, talking: &AtomicBool, now: Instant) {
+    if deadline.is_some_and(|at| now >= at) {
+        *deadline = None;
+        talking.store(false, Ordering::SeqCst);
+    }
+}
+
 fn spawn_workers(shared: Arc<Shared>) {
     let home_dir = home::default_home();
     let preferred = home::port_from_home(&home_dir);
@@ -1289,7 +1297,9 @@ fn spawn_workers(shared: Arc<Shared>) {
                 let mut harness = None::<Client>;
                 let ollama = Ollama::new().ok();
                 let mut session = None::<String>;
+                let mut talking_deadline = None;
                 loop {
+                    expire_talking(&mut talking_deadline, &shared.talking, Instant::now());
                     let password_change = {
                         shared
                             .pending_password_change
@@ -1379,6 +1389,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             None
                         };
                         shared.in_flight.store(true, Ordering::SeqCst);
+                        talking_deadline = None;
                         shared.talking.store(false, Ordering::SeqCst);
                         if backend == BACKEND_OLLAMA {
                             let result = ollama
@@ -1394,6 +1405,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             match result {
                                 Ok(reply) => {
                                     *shared.last_reply.lock().unwrap() = reply;
+                                    talking_deadline = Some(Instant::now() + Duration::from_secs(8));
                                     shared.talking.store(true, Ordering::SeqCst);
                                 }
                                 Err(OllamaError::Unreachable) => {
@@ -1450,6 +1462,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                         text = display::with_web_tools_note(&text, reply.web_tools.len());
                                     }
                                     *shared.last_reply.lock().unwrap() = text;
+                                    talking_deadline = Some(Instant::now() + Duration::from_secs(8));
                                     shared.talking.store(true, Ordering::SeqCst);
                                 }
                                 Err(ClientError::RateLimited) => {
@@ -1485,13 +1498,6 @@ fn spawn_workers(shared: Arc<Shared>) {
                             }
                         }
                         shared.in_flight.store(false, Ordering::SeqCst);
-                        std::thread::spawn({
-                            let shared = Arc::clone(&shared);
-                            move || {
-                                std::thread::sleep(Duration::from_secs(8));
-                                shared.talking.store(false, Ordering::SeqCst);
-                            }
-                        });
                     } else {
                         std::thread::sleep(Duration::from_millis(80));
                     }
@@ -1528,6 +1534,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn newer_reply_keeps_talking_until_its_own_deadline() {
+        let start = Instant::now();
+        let talking = AtomicBool::new(true);
+        let mut deadline = Some(start + Duration::from_secs(8));
+        expire_talking(&mut deadline, &talking, start + Duration::from_secs(7));
+        assert!(talking.load(Ordering::SeqCst));
+        deadline = Some(start + Duration::from_secs(15));
+        expire_talking(&mut deadline, &talking, start + Duration::from_secs(8));
+        assert!(talking.load(Ordering::SeqCst));
+        expire_talking(&mut deadline, &talking, start + Duration::from_secs(15));
+        assert!(!talking.load(Ordering::SeqCst));
+        assert!(deadline.is_none());
+    }
 
     #[test]
     fn certificate_rejection_survives_missing_cert_on_later_poll() {
