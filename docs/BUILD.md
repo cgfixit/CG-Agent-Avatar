@@ -63,21 +63,23 @@ Cargo Deny's advisory fetch is a separate operation; `cargo deny --offline
 | Secret scan | Run Gitleaks separately | Pinned Gitleaks with archive checksum verification |
 | Native interaction/screenshots | Manual Computer Use on the built app | Not covered by hosted unit tests |
 
+The TLS stack is `reqwest` 0.13 on rustls with the `ring` crypto provider,
+selected by `src/tls.rs` through reqwest's `rustls-no-provider` feature. 0.13
+removed `tls_built_in_root_certs` (the pin that trusted nothing but the harness
+leaf) in favor of `tls_certs_only`, and reqwest's own `rustls` feature would
+compile `aws-lc-rs`, a C build that needs cmake. `rustls-no-provider` plus the
+`ring` provider installed by `src/tls.rs` keeps the crypto 0.12 used and stays
+pure Rust on every CI leg and in `package-app.sh`. That upgrade was a reviewed
+change. Dependabot still ignores reqwest semver-major updates, so a later major
+— which would change the TLS API again — stays a reviewed migration rather than
+an automatic bump.
+
 All dependency-resolving build/test commands use `--locked`. Review intentional
 updates to `Cargo.toml` and `Cargo.lock` together, then rerun checks; a passing
 locked build verifies the committed resolution, not that every crate is the
 newest published version. Run `cargo update --dry-run` to check whether newer
 compatible versions would change the lockfile without editing it. Dependabot
 checks Cargo and Actions weekly.
-
-`reqwest` stays on 0.12 on purpose. 0.13 removes `tls_built_in_root_certs`,
-which the pinned-certificate client uses to trust nothing but the harness's
-own leaf, in favor of `tls_certs_only`, and its `rustls` feature switches the
-crypto provider from `ring` to `aws-lc-rs`, a C build that wants CMake.
-Moving needs the pinning control re-verified on macOS CI and a decision on the
-provider (`rustls-no-provider` plus an explicitly installed `ring` provider
-keeps the current crypto), so Dependabot ignores that major and the upgrade is
-a reviewed change of its own.
 
 ## Backend setup
 

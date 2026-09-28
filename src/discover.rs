@@ -109,6 +109,9 @@ pub fn parse_lsof_fields(text: &str) -> Vec<u16> {
 /// runtime thread, so one is built per discovery pass and reused across
 /// candidates rather than built per port.
 fn probe_client() -> Option<reqwest::blocking::Client> {
+    // reqwest panics in `Client::build()` with `rustls-no-provider` until ring
+    // is installed. This builder does not go through `client::builder`.
+    crate::tls::ensure_crypto_provider();
     reqwest::blocking::Client::builder()
         .user_agent("cg-agent/0.1")
         .no_proxy()

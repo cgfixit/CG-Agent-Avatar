@@ -14,6 +14,7 @@ pub mod ollama;
 pub mod origin;
 pub mod paths;
 pub mod theme;
+pub mod tls;
 pub mod validate;
 pub mod web_intent;
 

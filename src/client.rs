@@ -140,6 +140,7 @@ impl fmt::Debug for Client {
 /// Every client keeps its session cookie in memory only. Clients for the same
 /// harness may share one jar so a login on one thread is seen by another.
 fn builder(jar: Arc<Jar>) -> reqwest::blocking::ClientBuilder {
+    crate::tls::ensure_crypto_provider();
     reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
         .no_proxy()
@@ -168,7 +169,9 @@ impl Client {
     }
 
     /// HTTPS with a single pinned leaf certificate (PEM), no other CA is
-    /// trusted for this client. `cert_pem` should come from the harness's
+    /// trusted for this client: `tls_certs_only` builds a root store holding
+    /// only this certificate, bypassing the platform verifier and the
+    /// built-in roots. `cert_pem` should come from the harness's
     /// own home directory (see `home::read_pinned_cert`) — never from the
     /// network, and never with `danger_accept_invalid_certs`.
     pub fn new_https(origin: LoopbackOrigin, cert_pem: &[u8]) -> Result<Self, ClientError> {
@@ -200,8 +203,7 @@ impl Client {
         let cert =
             reqwest::Certificate::from_pem(cert_pem).map_err(|_| ClientError::CertMismatch)?;
         let http = builder(jar)
-            .tls_built_in_root_certs(false)
-            .add_root_certificate(cert)
+            .tls_certs_only([cert])
             .build()
             .map_err(|_| ClientError::CertMismatch)?;
         Ok(Self {

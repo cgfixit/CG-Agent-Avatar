@@ -140,6 +140,7 @@ pub struct Ollama {
 
 impl Ollama {
     pub fn new() -> Result<Self, OllamaError> {
+        crate::tls::ensure_crypto_provider();
         let http = reqwest::blocking::Client::builder()
             .user_agent(USER_AGENT)
             .no_proxy()
@@ -521,6 +522,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let hold = std::thread::spawn(move || listener.accept().map(|(s, _)| s));
+        crate::tls::ensure_crypto_provider();
         let err = reqwest::blocking::Client::builder()
             .no_proxy()
             .timeout(Duration::from_millis(200))
