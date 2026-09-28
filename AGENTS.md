@@ -61,8 +61,11 @@ layer that can hold it.
   - `GET /`, `/api/status`, `/api/sessions`;
   - `POST /api/sessions`, `/api/chat`, `/api/auth/login`, `/api/auth/password`.
 
-  It also holds a documented `FORBIDDEN` list (agent run/jobs, `web/*`, `memory/*`,
-  soul, keys, logout, users) that tests keep unreachable.
+  It also holds a documented `FORBIDDEN` list (agent run/jobs/schedules, MCP calls,
+  config reload, model pull/select, attachments, `web/*`, `memory/*`,
+  structured-memory purge/gates, soul, keys, logout, users, bootstrap password)
+  that tests keep unreachable. Every entry is an exact path from the harness's
+  `REGISTERED_PATHS`.
 - **`validate.rs`**: fail-closed outbound checks, run before any bytes leave the
   process: message ≤ 32,768 chars after trim with no NUL, and a session-ID charset
   and length limit.

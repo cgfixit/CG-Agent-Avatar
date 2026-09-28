@@ -25,21 +25,43 @@ pub const ALLOWED_POST: &[&str] = &[
 ];
 
 /// Routes the companion must never call. Documented so CI can lock the list.
+/// Every entry is a real, exact path from cg-agent-harness's
+/// `REGISTERED_PATHS` (src/server/routes/mod.rs); parameterised routes such
+/// as `/api/sessions/{session_id}/adopt` are excluded by the allowlist's
+/// exact-match rule without needing a row here.
 pub const FORBIDDEN: &[&str] = &[
+    // Agent execution, scheduling, and write surfaces.
     "/api/agent/run",
     "/api/agent/jobs",
     "/api/agent/runs",
+    "/api/agent/schedules",
+    "/api/mcp/call",
+    "/api/config/reload",
+    "/api/ollama/pull",
+    "/api/model",
+    // Chat and session mutation beyond one turn in one owned session.
     "/api/chat/cancel",
+    "/api/chat/attachments",
     "/api/sessions/clear",
+    // Personality, memory, and key material.
     "/api/soul",
+    "/api/soul/proposals",
     "/api/keys",
+    "/api/memory/add",
+    "/api/memory/clear",
+    "/api/structured-memory/purge",
+    "/api/structured-memory/gates",
+    // The harness's own web access (this app never goes off-loopback via it).
     "/api/web/fetch",
     "/api/web/search",
     "/api/web/inject",
-    "/api/memory/add",
-    "/api/memory/clear",
+    "/api/web/research",
+    "/api/web/allow",
+    "/api/web/deny",
+    // Account administration and bootstrap.
     "/api/auth/logout",
     "/api/auth/users",
+    "/api/auth/bootstrap-password",
 ];
 
 pub fn is_allowed_get(path: &str) -> bool {
@@ -76,6 +98,27 @@ mod tests {
     fn forbidden_and_allowed_do_not_overlap() {
         for p in FORBIDDEN {
             assert!(!is_allowed_get(p), "{p}");
+            assert!(!is_allowed_post(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn forbidden_entries_are_exact_unique_api_paths() {
+        let mut seen = std::collections::BTreeSet::new();
+        for p in FORBIDDEN {
+            assert!(p.starts_with("/api/"), "{p}");
+            assert!(!p.ends_with('/'), "{p}");
+            assert!(!p.contains('{'), "parameterised route needs no row: {p}");
+            assert!(seen.insert(*p), "duplicate FORBIDDEN entry {p}");
+        }
+        // Sibling routes of an allowlisted path stay out: the allowlist is an
+        // exact match, so these never reach the harness even by accident.
+        for p in [
+            "/api/chat/attachments",
+            "/api/sessions/clear",
+            "/api/auth/logout",
+        ] {
+            assert!(FORBIDDEN.contains(&p), "{p}");
             assert!(!is_allowed_post(p), "{p}");
         }
     }
