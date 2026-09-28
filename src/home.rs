@@ -66,7 +66,26 @@ pub fn read_pinned_cert(home: &Path) -> Option<Vec<u8>> {
     if bytes.len() as u64 != meta.len() {
         return None;
     }
-    Some(bytes)
+    certificate_blocks(&bytes)
+}
+
+/// Harness writes its certificate *and private key* into `server.pem`.
+/// Keep only the `CERTIFICATE` blocks so the key never reaches the TLS
+/// stack or outlives this read; `None` when there is no certificate.
+fn certificate_blocks(pem: &[u8]) -> Option<Vec<u8>> {
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const END: &str = "-----END CERTIFICATE-----";
+    let text = std::str::from_utf8(pem).ok()?;
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(BEGIN) {
+        let block = &rest[start..];
+        let end = block.find(END)? + END.len();
+        out.push_str(&block[..end]);
+        out.push('\n');
+        rest = &block[end..];
+    }
+    (!out.is_empty()).then(|| out.into_bytes())
 }
 
 pub fn port_from_home(home: &Path) -> u16 {
@@ -168,6 +187,27 @@ mod tests {
         assert!(std::str::from_utf8(&bytes)
             .unwrap()
             .contains("BEGIN CERTIFICATE"));
+    }
+
+    #[test]
+    fn private_key_in_harness_bundle_is_dropped() {
+        // Built at runtime so no key-shaped literal trips secret scanning.
+        let key_block = |body: &str| {
+            let label = ["PRIVATE", "KEY"].join(" ");
+            format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+        };
+        let cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n";
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("tls")).unwrap();
+        fs::write(
+            dir.path().join("tls").join("server.pem"),
+            format!("{cert}{}", key_block("not-a-key")),
+        )
+        .unwrap();
+        let text = String::from_utf8(read_pinned_cert(dir.path()).unwrap()).unwrap();
+        assert_eq!(text, cert);
+        assert!(certificate_blocks(key_block("k").as_bytes()).is_none());
+        assert!(certificate_blocks(b"-----BEGIN CERTIFICATE-----\nunterminated").is_none());
     }
 
     #[test]
