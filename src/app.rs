@@ -1041,27 +1041,26 @@ fn text_color(active: &theme::Theme) -> Retained<NSColor> {
     }
 }
 
-/// A `LoopbackOrigin` + `Client` for the last-resolved harness scheme.
-/// HTTPS requires the harness's own pinned leaf certificate
-/// (`home::read_pinned_cert`) — with no cert available, an HTTPS-resolved
-/// port simply cannot be connected to yet (that itself is a meaningful,
-/// non-"asleep" state, surfaced by the caller checking for `None`).
+/// Build a client for the resolved scheme without hiding certificate rejection.
 fn build_harness_client(
-    port: u16,
-    https: bool,
+    endpoint: discover::Reachable,
     cert: Option<&[u8]>,
     jar: &Arc<SessionJar>,
-) -> Option<Client> {
-    if https {
-        Client::https_with_jar(
-            LoopbackOrigin::from_port_https(port),
-            cert?,
-            Arc::clone(jar),
-        )
-        .ok()
-    } else {
-        Client::with_jar(LoopbackOrigin::from_port(port), Arc::clone(jar)).ok()
-    }
+) -> Result<Client, ClientError> {
+    let origin = match endpoint {
+        discover::Reachable::Http(port) => {
+            return Client::with_jar(LoopbackOrigin::from_port(port), Arc::clone(jar));
+        }
+        discover::Reachable::Https(port) => LoopbackOrigin::from_port_https(port),
+        discover::Reachable::HttpsV6(port) => {
+            LoopbackOrigin::parse_https(&format!("https://[::1]:{port}"))?
+        }
+    };
+    Client::https_with_jar(
+        origin,
+        cert.ok_or(ClientError::CertMismatch)?,
+        Arc::clone(jar),
+    )
 }
 
 /// The status worker's client, kept until the harness stops answering or its
@@ -1075,14 +1074,8 @@ struct StatusClient {
 enum HarnessProbe {
     Confirmed(discover::Reachable, Status),
     RateLimited,
+    CertMismatch,
     Unavailable,
-}
-
-fn endpoint_parts(endpoint: discover::Reachable) -> (u16, bool) {
-    match endpoint {
-        discover::Reachable::Http(port) => (port, false),
-        discover::Reachable::Https(port) => (port, true),
-    }
 }
 
 fn ollama_health(ollama: Option<&Ollama>) -> Health {
@@ -1102,31 +1095,63 @@ fn ollama_health(ollama: Option<&Ollama>) -> Health {
 
 fn harness_probe(
     cache: &mut Option<StatusClient>,
+    http_fallback: &mut discover::HttpFallback,
     preferred: u16,
     home_dir: &std::path::Path,
-    shared: &Shared,
+    jar: &Arc<SessionJar>,
+) -> HarnessProbe {
+    let probe = harness_probe_once(cache, *http_fallback, preferred, home_dir, jar);
+    match &probe {
+        HarnessProbe::CertMismatch => {
+            *cache = None;
+            *http_fallback = discover::HttpFallback::Forbidden;
+        }
+        HarnessProbe::Confirmed(
+            discover::Reachable::Https(_) | discover::Reachable::HttpsV6(_),
+            _,
+        ) => {
+            *http_fallback = discover::HttpFallback::Allowed;
+        }
+        _ => {}
+    }
+    probe
+}
+
+fn harness_probe_once(
+    cache: &mut Option<StatusClient>,
+    http_fallback: discover::HttpFallback,
+    preferred: u16,
+    home_dir: &std::path::Path,
+    jar: &Arc<SessionJar>,
 ) -> HarnessProbe {
     let cert = home::read_pinned_cert(home_dir);
     if let Some(cached) = cache.as_ref().filter(|c| c.cert == cert) {
         match cached.client.status() {
             Ok(status) => return HarnessProbe::Confirmed(cached.endpoint, status),
             Err(ClientError::RateLimited) => return HarnessProbe::RateLimited,
+            Err(ClientError::CertMismatch) => return HarnessProbe::CertMismatch,
             _ => {}
         }
     }
     *cache = None;
-    // Re-probe (https first, then legacy http, across the lsof candidates)
-    // only when the cached connection stopped answering as a harness.
-    let Some(reachable) = discover::resolve_reachable(preferred, cert.as_deref()) else {
-        return HarnessProbe::Unavailable;
+    let reachable = match discover::resolve_reachable(preferred, cert.as_deref(), http_fallback) {
+        Ok(Some(reachable)) => reachable,
+        Err(ClientError::CertMismatch) => return HarnessProbe::CertMismatch,
+        _ if http_fallback == discover::HttpFallback::Forbidden => {
+            return HarnessProbe::CertMismatch
+        }
+        _ => return HarnessProbe::Unavailable,
     };
-    let (port, https) = endpoint_parts(reachable);
-    let Some(client) = build_harness_client(port, https, cert.as_deref(), &shared.jar) else {
-        return HarnessProbe::Unavailable;
+    let client = build_harness_client(reachable, cert.as_deref(), jar);
+    let client = match client {
+        Ok(client) => client,
+        Err(ClientError::CertMismatch) => return HarnessProbe::CertMismatch,
+        Err(_) => return HarnessProbe::Unavailable,
     };
     let probe = match client.status() {
         Ok(status) => HarnessProbe::Confirmed(reachable, status),
         Err(ClientError::RateLimited) => HarnessProbe::RateLimited,
+        Err(ClientError::CertMismatch) => return HarnessProbe::CertMismatch,
         Err(_) => HarnessProbe::Unavailable,
     };
     *cache = Some(StatusClient {
@@ -1185,6 +1210,7 @@ fn spawn_workers(shared: Arc<Shared>) {
             let home_dir = home_dir.clone();
             move || {
                 let mut cache = None::<StatusClient>;
+                let mut http_fallback = discover::HttpFallback::Allowed;
                 let mut health = Health::Asleep;
                 let mut polled = None::<(u8, Instant)>;
                 loop {
@@ -1199,7 +1225,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             ollama_health(status_ollama.as_ref())
                         } else {
                             let generation = shared.guide.lock().unwrap().generation();
-                            let probe = harness_probe(&mut cache, preferred, &home_dir, &shared);
+                            let probe = harness_probe(&mut cache, &mut http_fallback, preferred, &home_dir, &shared.jar);
                             let mut guide = shared.guide.lock().unwrap();
                             if !guide.current(generation) {
                                 Health::Asleep
@@ -1221,6 +1247,12 @@ fn spawn_workers(shared: Arc<Shared>) {
                                         } else {
                                             Health::Sick
                                         }
+                                    }
+                                    HarnessProbe::CertMismatch => {
+                                        guide.observe(generation, None);
+                                        *shared.last_reply.lock().unwrap() =
+                                            "harness certificate changed — verify it, then re-check trust".into();
+                                        Health::Sick
                                     }
                                     HarnessProbe::RateLimited => health.clone(),
                                     HarnessProbe::Unavailable => {
@@ -1253,8 +1285,7 @@ fn spawn_workers(shared: Arc<Shared>) {
             let shared = Arc::clone(&shared);
             let home_dir = home_dir.clone();
             move || {
-                let mut last_port = 0u16;
-                let mut last_https = false;
+                let mut last_endpoint = None;
                 let mut harness = None::<Client>;
                 let ollama = Ollama::new().ok();
                 let mut session = None::<String>;
@@ -1269,13 +1300,11 @@ fn spawn_workers(shared: Arc<Shared>) {
                     if let Some((generation, current_password, password)) = password_change {
                         let endpoint = shared.guide.lock().unwrap().reset_endpoint(generation);
                         if let Some(endpoint) = endpoint {
-                            let (port, https) = endpoint_parts(endpoint);
-                            if port != last_port || https != last_https || harness.is_none() {
+                            if last_endpoint != Some(endpoint) || harness.is_none() {
                                 let cert = home::read_pinned_cert(&home_dir);
-                                harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
+                                harness = build_harness_client(endpoint, cert.as_deref(), &shared.jar).ok();
                                 session = None;
-                                last_port = port;
-                                last_https = https;
+                                last_endpoint = Some(endpoint);
                             }
                             let result = harness.as_mut().ok_or(ClientError::Unreachable)
                                 .and_then(|client| client.change_password(&current_password, &password));
@@ -1301,13 +1330,11 @@ fn spawn_workers(shared: Arc<Shared>) {
                     if let Some((generation, username, password)) = login {
                         let endpoint = shared.guide.lock().unwrap().endpoint(generation);
                         if let Some(endpoint) = endpoint {
-                            let (port, https) = endpoint_parts(endpoint);
-                            if port != last_port || https != last_https || harness.is_none() {
+                            if last_endpoint != Some(endpoint) || harness.is_none() {
                                 let cert = home::read_pinned_cert(&home_dir);
-                                harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
+                                harness = build_harness_client(endpoint, cert.as_deref(), &shared.jar).ok();
                                 session = None;
-                                last_port = port;
-                                last_https = https;
+                                last_endpoint = Some(endpoint);
                             }
                             let result = harness.as_mut().ok_or(ClientError::Unreachable)
                                 .and_then(|client| client.login(&username, &password));
@@ -1382,13 +1409,12 @@ fn spawn_workers(shared: Arc<Shared>) {
                             }
                         } else {
                             let result = (|| {
-                                let (port, https) = endpoint_parts(endpoint.unwrap());
-                                if port != last_port || https != last_https || harness.is_none() {
+                                let endpoint = endpoint.unwrap();
+                                if last_endpoint != Some(endpoint) || harness.is_none() {
                                     let cert = home::read_pinned_cert(&home_dir);
-                                    harness = build_harness_client(port, https, cert.as_deref(), &shared.jar);
+                                    harness = build_harness_client(endpoint, cert.as_deref(), &shared.jar).ok();
                                     session = None;
-                                    last_port = port;
-                                    last_https = https;
+                                    last_endpoint = Some(endpoint);
                                 }
                                 let client = harness.as_mut().ok_or(ClientError::Unreachable)?;
                                 if session.is_none() {
@@ -1502,6 +1528,70 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn certificate_rejection_survives_missing_cert_on_later_poll() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("tls")).unwrap();
+        let cert_path = home.path().join("tls/server.pem");
+        std::fs::write(
+            &cert_path,
+            "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        let mut server = mockito::Server::new();
+        let request = server.mock("GET", "/api/status").expect(0).create();
+        let port = url::Url::parse(&server.url()).unwrap().port().unwrap();
+        let mut cache = None;
+        let mut fallback = discover::HttpFallback::Allowed;
+        let jar = Arc::default();
+        assert!(matches!(
+            harness_probe(&mut cache, &mut fallback, port, home.path(), &jar),
+            HarnessProbe::CertMismatch
+        ));
+        assert_eq!(fallback, discover::HttpFallback::Forbidden);
+        assert!(cache.is_none());
+        std::fs::remove_file(cert_path).unwrap();
+        assert!(matches!(
+            harness_probe(&mut cache, &mut fallback, port, home.path(), &jar),
+            HarnessProbe::CertMismatch
+        ));
+        assert_eq!(fallback, discover::HttpFallback::Forbidden);
+        assert!(cache.is_none());
+        request.assert();
+    }
+
+    #[test]
+    fn ipv6_discovery_client_keeps_the_confirmed_address() {
+        let cert = b"-----BEGIN CERTIFICATE-----
+MIIDQDCCAiigAwIBAgIUMDtxYF827xGvesjv4aFLv9ZggHQwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJMTI3LjAuMC4xMB4XDTI2MDkyODA0NTgyM1oXDTI2MDkz
+MDA0NTgyM1owFDESMBAGA1UEAwwJMTI3LjAuMC4xMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAtx90E9cLXevCuzJlXkBXTPxbkuFkCcWw17WtHpkqE+ax
+a8T1miE/MI8tS2cmzEWMEsBVch1rSFK9zjvxkBjSzUl9c0UjdWV7ZBRnPrwKUxp6
+rJKjhnBQV2PdMu/aN75TinbQ2zrZwxF3z7YyuYzJF51JhUJwLgEk5dHja6/JcAlS
+3DvrYkX+reHWIy7gEjrmnmIKIGZLSFns7gNCX/6u3M/A1MFMCf3XHPtgCdlobLZD
+KfjtU/r0lC6SPJOQjxMxHUz+npjXZm8KP5Fqr7QdL0MbnoXctRbcYfLzBIzqgOg5
+hLyziukAhKukDEiWxFAr+XDsXGix4P/suzpFXurKRQIDAQABo4GJMIGGMB0GA1Ud
+DgQWBBRkBEC+lim2enZdrkBUZP3pAN0KxzAfBgNVHSMEGDAWgBRkBEC+lim2enZd
+rkBUZP3pAN0KxzAhBgNVHREEGjAYhwR/AAABhxAAAAAAAAAAAAAAAAAAAAABMAwG
+A1UdEwEB/wQCMAAwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDQYJKoZIhvcNAQELBQAD
+ggEBAHauA2ZHhmy1oPcBTW9IQ/m58RJikYBQAEyDRXoTmNo2HvsVtLi0VuBP3F4M
+acma09lv7uJ5F/KjbM83pH5rGHUga3+Fm4/I5czFv58Exd6uNPsM18+BWrAsDg1v
+nFYebmD1Ass8QhA9teyrZN3B33DXplUnIL1O/jh5nQTBbhJ6zYGnc0His67zrLwg
+pdXGPUOUoW4Iq3GjnZmGmV49C57yRSrtaic/Lq94YIjbZXQbnHr375ZBQLkzivTq
+dCutk0xvqDJOMQPzR8ekTw8sktOTFh8y14QdaI93uPOTudcG0Sp0PlxXiQncElcc
+a+VhHbrWdvoCoROeKF3msYiqjFE=
+-----END CERTIFICATE-----
+";
+        let client = build_harness_client(
+            discover::Reachable::HttpsV6(8790),
+            Some(cert),
+            &Arc::default(),
+        )
+        .unwrap();
+        assert_eq!(client.origin().as_str(), "https://[::1]:8790");
+    }
 
     #[test]
     fn direct_ollama_is_the_launch_default() {

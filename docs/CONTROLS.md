@@ -20,7 +20,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness needs a password change | Bubble says `bootstrap password must be changed — use Harness Password Reset…` |
 | Harness model, provider, or key unavailable | Bubble asks you to configure them in Harness; Return leaves the typed text in the field |
 | Harness status usable | Bubble says `Harness ready — type below, Return to send` |
-| Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust` |
+| Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Bubble appends a compact `[via web ×N]` note. For Harness, N counts Harness's own web tool calls. For Direct Ollama it is `×1`, the lookup you asked for. Avatar never fetches pages itself |
 
@@ -92,7 +92,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
 | Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |
-| Certificate mismatch | Verify Harness's certificate and home. Avatar does not offer a bypass or change Keychain trust. |
+| Certificate mismatch | Verify Harness's certificate and home. Status polls read the certificate fresh and recover after pinned HTTPS succeeds. After a rejection, missing certificates and plain HTTP cannot restore readiness; intentionally switching that home to legacy HTTP requires restarting Avatar. Avatar does not offer a certificate bypass or change Keychain trust. |
 | Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. |
 
 For fresh native examples, see the [README screenshots](../README.md) and

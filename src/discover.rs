@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::client::Client;
+use crate::client::{Client, ClientError};
 use crate::http::{self, MAX_BODY};
 use crate::origin::LoopbackOrigin;
 
@@ -21,6 +21,13 @@ const MAX_CANDIDATES: usize = 16;
 pub enum Reachable {
     Http(u16),
     Https(u16),
+    HttpsV6(u16),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpFallback {
+    Allowed,
+    Forbidden,
 }
 
 pub fn looks_like_harness(v: &Value) -> bool {
@@ -141,57 +148,73 @@ pub fn probe_harness(port: u16) -> bool {
 /// Reuses `Client` so this gets the same size cap, redirect refusal, and
 /// scheme guard as every other request this app makes — no bespoke TLS code
 /// here.
-pub fn probe_harness_https(port: u16, pinned_cert: &[u8]) -> bool {
-    probe_https_host(port, pinned_cert, "127.0.0.1") || probe_https_host(port, pinned_cert, "[::1]")
+pub fn probe_harness_https(
+    port: u16,
+    pinned_cert: &[u8],
+) -> Result<Option<Reachable>, ClientError> {
+    if probe_https_host(port, pinned_cert, "127.0.0.1")? {
+        return Ok(Some(Reachable::Https(port)));
+    }
+    Ok(probe_https_host(port, pinned_cert, "[::1]")?.then_some(Reachable::HttpsV6(port)))
 }
 
-fn probe_https_host(port: u16, pinned_cert: &[u8], host: &str) -> bool {
+fn probe_https_host(port: u16, pinned_cert: &[u8], host: &str) -> Result<bool, ClientError> {
     let Ok(origin) = LoopbackOrigin::parse_https(&format!("https://{host}:{port}")) else {
-        return false;
+        return Ok(false);
     };
-    let Ok(client) = Client::new_https(origin, pinned_cert) else {
-        return false;
-    };
-    client.status().is_ok()
+    match Client::new_https(origin, pinned_cert).and_then(|client| client.status()) {
+        Ok(_) => Ok(true),
+        Err(ClientError::CertMismatch) => Err(ClientError::CertMismatch),
+        Err(_) => Ok(false),
+    }
 }
 
-/// Prefer `preferred` (8790 / harness.json). Tries HTTPS with the pinned
-/// certificate first when one is available — fresh homes have no HTTP
-/// fallback — then falls back to plain HTTP for legacy
-/// (`tls.enabled: false`) homes. Returns `None` if nothing on the
-/// loopback range answers as a harness at all, instead of silently handing
-/// back `preferred` as if it had been confirmed.
-pub fn resolve_reachable(preferred: u16, pinned_cert: Option<&[u8]>) -> Option<Reachable> {
-    resolve_reachable_from_candidates(preferred, pinned_cert, listen_ports_from_lsof)
+/// Try pinned HTTPS before legacy HTTP. Certificate rejection aborts discovery;
+/// ordinary HTTPS unavailability permits HTTP only when the caller allows it.
+pub fn resolve_reachable(
+    preferred: u16,
+    pinned_cert: Option<&[u8]>,
+    http_fallback: HttpFallback,
+) -> Result<Option<Reachable>, ClientError> {
+    resolve_reachable_from_candidates(
+        preferred,
+        pinned_cert,
+        http_fallback,
+        listen_ports_from_lsof,
+    )
 }
 
 fn resolve_reachable_from_candidates(
     preferred: u16,
     pinned_cert: Option<&[u8]>,
+    http_fallback: HttpFallback,
     candidates: impl FnOnce() -> Vec<u16>,
-) -> Option<Reachable> {
+) -> Result<Option<Reachable>, ClientError> {
+    if pinned_cert.is_none() && http_fallback == HttpFallback::Forbidden {
+        return Err(ClientError::CertMismatch);
+    }
     if let Some(cert) = pinned_cert {
-        if probe_harness_https(preferred, cert) {
-            return Some(Reachable::Https(preferred));
+        if let Some(endpoint) = probe_harness_https(preferred, cert)? {
+            return Ok(Some(endpoint));
         }
     }
-    if probe_harness(preferred) {
-        return Some(Reachable::Http(preferred));
+    if http_fallback == HttpFallback::Allowed && probe_harness(preferred) {
+        return Ok(Some(Reachable::Http(preferred)));
     }
     for port in candidates() {
         if port == preferred {
             continue;
         }
         if let Some(cert) = pinned_cert {
-            if probe_harness_https(port, cert) {
-                return Some(Reachable::Https(port));
+            if let Some(endpoint) = probe_harness_https(port, cert)? {
+                return Ok(Some(endpoint));
             }
         }
-        if probe_harness(port) {
-            return Some(Reachable::Http(port));
+        if http_fallback == HttpFallback::Allowed && probe_harness(port) {
+            return Ok(Some(Reachable::Http(port)));
         }
     }
-    None
+    Ok(None)
 }
 
 fn lsof_stdout() -> Option<String> {
@@ -274,38 +297,71 @@ mod tests {
     fn resolve_reachable_is_none_when_nothing_answers() {
         // Keep the no-candidate case independent of unrelated desktop
         // Harness listeners on the developer's machine.
-        assert_eq!(resolve_reachable_from_candidates(1, None, Vec::new), None);
-        assert_eq!(
-            resolve_reachable_from_candidates(1, Some(b"garbage"), Vec::new),
-            None
-        );
+        assert!(matches!(
+            resolve_reachable_from_candidates(1, None, HttpFallback::Allowed, Vec::new),
+            Ok(None)
+        ));
     }
 
     #[test]
-    fn resolve_reachable_prefers_https_when_cert_available() {
+    fn resolve_reachable_preserves_legacy_http() {
         let mut server = mockito::Server::new();
-        let _m = server
+        let request = server
             .mock("GET", "/api/status")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"model":"qwen","provider":"ollama","api_key_optional":true}"#)
             .create();
-        let origin = LoopbackOrigin::parse(&server.url()).unwrap();
-        let port = origin.as_str().rsplit(':').next().unwrap().parse().unwrap();
-        // mockito only serves plain HTTP, so the https attempt fails and
-        // this exercises the fallback path landing on Http(port), proving
-        // resolve_reachable does not simply trust https and give up.
-        assert_eq!(
-            resolve_reachable_from_candidates(port, Some(b"garbage"), || {
+        let port = url::Url::parse(&server.url()).unwrap().port().unwrap();
+        assert!(matches!(
+            resolve_reachable_from_candidates(port, None, HttpFallback::Allowed, || {
                 panic!("must not run lsof when the preferred port answers")
             }),
-            Some(Reachable::Http(port))
+            Ok(Some(Reachable::Http(found))) if found == port
+        ));
+        request.assert();
+    }
+
+    #[test]
+    fn certificate_rejection_never_probes_plain_http() {
+        let mut server = mockito::Server::new();
+        let request = server
+            .mock("GET", "/api/status")
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"model":"qwen","provider":"ollama","api_key_optional":true}"#)
+            .expect(0)
+            .create();
+        let port = url::Url::parse(&server.url()).unwrap().port().unwrap();
+        let result = resolve_reachable_from_candidates(
+            port,
+            Some(b"garbage"),
+            HttpFallback::Allowed,
+            || panic!("certificate rejection must not enumerate other candidates"),
         );
+        assert!(matches!(result, Err(ClientError::CertMismatch)));
+        request.assert();
+    }
+
+    #[test]
+    fn forbidden_fallback_with_missing_cert_sends_no_http() {
+        let mut server = mockito::Server::new();
+        let request = server.mock("GET", "/api/status").expect(0).create();
+        let port = url::Url::parse(&server.url()).unwrap().port().unwrap();
+        assert!(matches!(
+            resolve_reachable_from_candidates(port, None, HttpFallback::Forbidden, || panic!(
+                "missing required certificate must not enumerate candidates"
+            )),
+            Err(ClientError::CertMismatch)
+        ));
+        request.assert();
     }
 
     #[test]
     fn probe_harness_https_rejects_unparseable_cert() {
-        assert!(!probe_harness_https(1, b"garbage"));
+        assert!(matches!(
+            probe_harness_https(1, b"garbage"),
+            Err(ClientError::CertMismatch)
+        ));
     }
 
     #[test]
