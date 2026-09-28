@@ -12,6 +12,12 @@ updates:
         patterns: ["objc2*"]
       cargo-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # Semver-major reqwest updates change the TLS root-store API and crypto
+      # provider. 0.13 was a reviewed migration (docs/BUILD.md); later majors
+      # stay reviewed, not automatic bumps.
+      - dependency-name: reqwest
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

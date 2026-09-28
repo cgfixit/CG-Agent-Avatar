@@ -92,7 +92,10 @@ layer that can hold it.
   the desktop sidecar's ephemeral port by running argv-only
   `lsof -i4TCP@127.0.0.1 -sTCP:LISTEN` and probing `GET /api/status`. It never scans a
   port range, never touches the desktop focus socket, and skips Ollama's port
-  (`OLLAMA_PORT`) and privileged ports.
+  (`OLLAMA_PORT`) and privileged ports. One pinned HTTPS client and one plain
+  probe client are built per pass and re-pointed at each candidate
+  (`Client::rebind`); every `reqwest` client owns a runtime thread, so never
+  build one per port.
 - **`ollama.rs`**: the Direct Ollama backend (the default).
   - It talks only to `127.0.0.1:11434`, with its own allowlist:
     `POST /v1/chat/completions`, `GET /api/tags`, and the daemon's

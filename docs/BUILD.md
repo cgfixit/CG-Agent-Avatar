@@ -64,9 +64,15 @@ Cargo Deny's advisory fetch is a separate operation; `cargo deny --offline
 | Native interaction/screenshots | Manual Computer Use on the built app | Not covered by hosted unit tests |
 
 The TLS stack is `reqwest` 0.13 on rustls with the `ring` crypto provider,
-selected by `src/tls.rs` through reqwest's `rustls-no-provider` feature. That keeps
-the build pure Rust: reqwest's default `rustls` feature would compile `aws-lc-rs`,
-which needs cmake and a C toolchain on every CI leg and in `package-app.sh`.
+selected by `src/tls.rs` through reqwest's `rustls-no-provider` feature. 0.13
+removed `tls_built_in_root_certs` (the pin that trusted nothing but the harness
+leaf) in favor of `tls_certs_only`, and reqwest's own `rustls` feature would
+compile `aws-lc-rs`, a C build that needs cmake. `rustls-no-provider` plus the
+`ring` provider installed by `src/tls.rs` keeps the crypto 0.12 used and stays
+pure Rust on every CI leg and in `package-app.sh`. That upgrade was a reviewed
+change. Dependabot still ignores reqwest semver-major updates, so a later major
+— which would change the TLS API again — stays a reviewed migration rather than
+an automatic bump.
 
 All dependency-resolving build/test commands use `--locked`. Review intentional
 updates to `Cargo.toml` and `Cargo.lock` together, then rerun checks; a passing

@@ -105,22 +105,32 @@ pub fn parse_lsof_fields(text: &str) -> Vec<u16> {
     ports
 }
 
-pub fn probe_harness(port: u16) -> bool {
-    let Ok(origin) = LoopbackOrigin::parse(&format!("http://127.0.0.1:{port}")) else {
-        return false;
-    };
-    let Ok(url) = origin.url_for("/api/status") else {
-        return false;
-    };
+/// The plain-HTTP probe client. Every `reqwest::blocking::Client` owns a
+/// runtime thread, so one is built per discovery pass and reused across
+/// candidates rather than built per port.
+fn probe_client() -> Option<reqwest::blocking::Client> {
+    // reqwest panics in `Client::build()` with `rustls-no-provider` until ring
+    // is installed. This builder does not go through `client::builder`.
     crate::tls::ensure_crypto_provider();
-    let Ok(http) = reqwest::blocking::Client::builder()
+    reqwest::blocking::Client::builder()
         .user_agent("cg-agent/0.1")
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(2))
         .connect_timeout(Duration::from_secs(1))
         .build()
-    else {
+        .ok()
+}
+
+pub fn probe_harness(port: u16) -> bool {
+    probe_client().is_some_and(|http| probe_harness_with(&http, port))
+}
+
+fn probe_harness_with(http: &reqwest::blocking::Client, port: u16) -> bool {
+    let Ok(origin) = LoopbackOrigin::parse(&format!("http://127.0.0.1:{port}")) else {
+        return false;
+    };
+    let Ok(url) = origin.url_for("/api/status") else {
         return false;
     };
     let Ok(resp) = http.get(url).send() else {
@@ -153,17 +163,28 @@ pub fn probe_harness_https(
     port: u16,
     pinned_cert: &[u8],
 ) -> Result<Option<Reachable>, ClientError> {
-    if probe_https_host(port, pinned_cert, "127.0.0.1")? {
-        return Ok(Some(Reachable::Https(port)));
-    }
-    Ok(probe_https_host(port, pinned_cert, "[::1]")?.then_some(Reachable::HttpsV6(port)))
+    probe_https_with(&pinned_client(port, pinned_cert)?, port)
 }
 
-fn probe_https_host(port: u16, pinned_cert: &[u8], host: &str) -> Result<bool, ClientError> {
+/// One pinned client per discovery pass: the certificate is parsed and the
+/// TLS trust built once, then `Client::rebind` points it at each candidate.
+/// An unusable pinned certificate is `CertMismatch` before any probe.
+fn pinned_client(port: u16, pinned_cert: &[u8]) -> Result<Client, ClientError> {
+    Client::new_https(LoopbackOrigin::from_port_https(port), pinned_cert)
+}
+
+fn probe_https_with(pinned: &Client, port: u16) -> Result<Option<Reachable>, ClientError> {
+    if probe_https_host(pinned, port, "127.0.0.1")? {
+        return Ok(Some(Reachable::Https(port)));
+    }
+    Ok(probe_https_host(pinned, port, "[::1]")?.then_some(Reachable::HttpsV6(port)))
+}
+
+fn probe_https_host(pinned: &Client, port: u16, host: &str) -> Result<bool, ClientError> {
     let Ok(origin) = LoopbackOrigin::parse_https(&format!("https://{host}:{port}")) else {
         return Ok(false);
     };
-    match Client::new_https(origin, pinned_cert).and_then(|client| client.status()) {
+    match pinned.rebind(origin).and_then(|client| client.status()) {
         Ok(_) => Ok(true),
         Err(ClientError::CertMismatch) => Err(ClientError::CertMismatch),
         Err(_) => Ok(false),
@@ -194,25 +215,32 @@ fn resolve_reachable_from_candidates(
     if pinned_cert.is_none() && http_fallback == HttpFallback::Forbidden {
         return Err(ClientError::CertMismatch);
     }
-    if let Some(cert) = pinned_cert {
-        if let Some(endpoint) = probe_harness_https(preferred, cert)? {
-            return Ok(Some(endpoint));
+    let pinned = pinned_cert
+        .map(|cert| pinned_client(preferred, cert))
+        .transpose()?;
+    let http = (http_fallback == HttpFallback::Allowed)
+        .then(probe_client)
+        .flatten();
+    let probe = |port: u16| -> Result<Option<Reachable>, ClientError> {
+        if let Some(pinned) = &pinned {
+            if let Some(endpoint) = probe_https_with(pinned, port)? {
+                return Ok(Some(endpoint));
+            }
         }
-    }
-    if http_fallback == HttpFallback::Allowed && probe_harness(preferred) {
-        return Ok(Some(Reachable::Http(preferred)));
+        Ok(http
+            .as_ref()
+            .is_some_and(|http| probe_harness_with(http, port))
+            .then_some(Reachable::Http(port)))
+    };
+    if let Some(endpoint) = probe(preferred)? {
+        return Ok(Some(endpoint));
     }
     for port in candidates() {
         if port == preferred {
             continue;
         }
-        if let Some(cert) = pinned_cert {
-            if let Some(endpoint) = probe_harness_https(port, cert)? {
-                return Ok(Some(endpoint));
-            }
-        }
-        if http_fallback == HttpFallback::Allowed && probe_harness(port) {
-            return Ok(Some(Reachable::Http(port)));
+        if let Some(endpoint) = probe(port)? {
+            return Ok(Some(endpoint));
         }
     }
     Ok(None)
@@ -318,6 +346,26 @@ mod tests {
             resolve_reachable_from_candidates(port, None, HttpFallback::Allowed, || {
                 panic!("must not run lsof when the preferred port answers")
             }),
+            Ok(Some(Reachable::Http(found))) if found == port
+        ));
+        request.assert();
+    }
+
+    #[test]
+    fn resolve_reachable_reaches_a_candidate_with_the_shared_probe_client() {
+        let mut server = mockito::Server::new();
+        let request = server
+            .mock("GET", "/api/status")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"model":"qwen","provider":"ollama","api_key_optional":true}"#)
+            .expect(1)
+            .create();
+        let port = url::Url::parse(&server.url()).unwrap().port().unwrap();
+        // Port 1 is privileged and silent, so the preferred probe fails and
+        // the same client moves on to the lsof candidate.
+        assert!(matches!(
+            resolve_reachable_from_candidates(1, None, HttpFallback::Allowed, || vec![1, port]),
             Ok(Some(Reachable::Http(found))) if found == port
         ));
         request.assert();

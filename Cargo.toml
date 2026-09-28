@@ -20,7 +20,8 @@ path = "src/main.rs"
 # select aws-lc-rs (C/cmake toolchain, ~30 extra crates). Keeping `ring`, the
 # provider 0.12 used, means no change to what the app ships; `tls::ensure_crypto_provider`
 # installs it before any client is built. TLS pinning is `tls_certs_only`
-# (single leaf cert, no built-in or platform roots).
+# (single leaf cert, no built-in or platform roots). This is the reviewed
+# migration that previously held the crate on 0.12; see docs/BUILD.md.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls-no-provider", "cookies"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1", features = ["derive"] }
