@@ -235,6 +235,37 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_harness_json_is_ignored() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("harness.json");
+        fs::write(&path, r#"{"port": 9001}"#).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(port_from_home(dir.path()), 8790);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(port_from_home(dir.path()), 9001);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_cert_is_ignored() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("tls")).unwrap();
+        let path = dir.path().join("tls").join("server.pem");
+        fs::write(
+            &path,
+            "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(read_pinned_cert(dir.path()).is_none());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_pinned_cert(dir.path()).is_some());
+    }
+
     #[test]
     fn relative_home_override_is_ignored() {
         assert!(!is_safe_home(Path::new("relative/home")));

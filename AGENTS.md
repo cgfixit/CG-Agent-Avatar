@@ -169,6 +169,7 @@ process spawning, `Info.plist`, or CI.
 | `tests/objections.rs` | SSRF baits rejected, CSRF injection shapes, session IDs shaped like paths, oversized bodies, token redaction in `Debug` |
 | `tests/lsof_argv.rs` | argv-only loopback `lsof`; Ollama and privileged ports skipped |
 | `tests/plist_contract.rs` | bundle ID `com.cgfixit.cg-agent`, `LSUIElement` (no Dock), ATS local networking only |
+| `tests/tls_pin.rs` | the Harness TLS pin with real loopback handshakes (certificates minted at run time with the `rcgen` dev-dependency, `ring` only): the pinned certificate is accepted; a different certificate, or one that doesn't cover loopback, is `CertMismatch`; a plaintext listener is never read |
 | `tests/ci_workflows.rs` | every workflow file under `.github/workflows` (discovered, not a fixed list); every step or job `uses` (including unnamed `- uses:` steps) pinned to a full commit SHA; parsed permissions are `contents: read` except `contents: write` on `bundle.yml`'s `release` job (quoted, block, and scalar forms); no `pull_request_target`; pinned cargo-audit; bundle schedule and dispatch; lockfile drift rejected; release toolchain tested on macOS |
 
 ## Doc map (one owner per fact)

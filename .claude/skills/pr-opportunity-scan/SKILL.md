@@ -84,9 +84,9 @@ long, speculative one.
 **Tests**
 - `check-security-invariants` has a section called "Invariants covered only by unit
   tests, or by reading". Each gap listed there (no test greps for `tls_certs_only`
-  or `redirect::Policy::none()`, none exercises `home.rs`'s world-writable check, none
-  performs a TLS handshake against the wrong certificate) is a candidate for a small
-  test. Confirm it is still a gap before proposing it.
+  or `redirect::Policy::none()`; `home.rs` ignores group-writable files and ownership;
+  discovery accepts a plain-HTTP listener on a TLS home while fallback is allowed) is a
+  candidate for a small test or fix. Confirm it is still a gap before proposing it.
 - Look for public functions in `validate.rs`, `csrf.rs`, `origin.rs`, `display.rs` without
   a boundary-value test (exact limit, limit+1, empty, NUL).
 

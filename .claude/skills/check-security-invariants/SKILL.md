@@ -27,7 +27,7 @@ The branch's own change is `git diff <base>...HEAD`; uncommitted work comes from
 `git status`.
 
 ```sh
-cargo test --locked --lib --test source_contracts --test objections --test lsof_argv --test plist_contract --test ci_workflows
+cargo test --locked --lib --test source_contracts --test objections --test lsof_argv --test plist_contract --test tls_pin --test ci_workflows
 ```
 
 `--lib` matters: `--test` flags select only integration targets, so without it none of the
@@ -49,6 +49,7 @@ unit tests cited below would run and the gate could look green without checking 
 | Ollama web lookups use only the daemon's `/api/experimental/web_search` and `/web_fetch`; `ollama.rs` never mentions `ollama.com`, `OLLAMA_API_KEY`, `Authorization`, `Bearer`, `"tools"`, or `tool_choice`; plain chat is exactly system + user; only explicit phrases trigger a lookup | `source_contracts.rs::ollama_web_lookups_stay_on_the_loopback_daemon` |
 | `launch.rs` launches the harness only by `CFBundleIdentifier` (`com.cgfixit.agent-harness`), never a hardcoded `/Applications` path, never `Command::new` | `source_contracts.rs::launch_uses_bundle_identifier_never_a_hardcoded_path` |
 | SSRF baits, agent-path joins, CSRF header-injection shapes, path-shaped session IDs, token redaction in `Debug`, oversized status JSON | `objections.rs::ssrf_baits_are_rejected`, `::allowlisted_loopback_still_works`, `::cannot_join_agent_path`, `::csrf_rejects_injection_shapes`, `::validate_refuses_path_session_ids`, `::client_debug_does_not_print_token`, `::oversized_status_json_is_too_large_or_json` |
+| The client trusts only the pinned certificate: it is accepted, a different valid certificate or one that doesn't cover loopback is `CertMismatch`, and a plaintext listener is never read (real loopback TLS handshakes) | `tls_pin.rs::the_pinned_certificate_is_accepted`, `::a_different_valid_certificate_is_a_cert_mismatch`, `::a_pinned_certificate_that_does_not_cover_loopback_is_rejected`, `::a_plain_http_listener_is_never_read_by_the_pinned_client` |
 | Bundle id `com.cgfixit.cg-agent`, `LSUIElement` true (no Dock) | `plist_contract.rs::bundle_identity`, `::accessory_no_dock` |
 | ATS: `NSAllowsLocalNetworking` present, `NSAllowsArbitraryLoads` absent | `plist_contract.rs::ats_local_networking_only` |
 | Every `uses:` is a full commit SHA with a version comment; tokens are `contents: read` except `bundle.yml`'s release job; no `pull_request_target`; checkouts don't persist credentials; every job has a timeout; caches are saved only from `main`; lockfile drift is rejected | `ci_workflows.rs::every_action_is_pinned_to_a_full_commit_sha`, `::workflow_tokens_are_read_only_except_the_release_job`, `::checkouts_never_persist_credentials`, `::every_job_has_a_timeout`, `::caches_are_written_only_from_main`, `::builds_and_checks_reject_lockfile_drift` |
@@ -83,21 +84,26 @@ table above. Read the code, and run the unit test named here.
   just that certificate), never `tls_certs_merge` or `danger_accept_invalid_certs`.
   Every `reqwest` builder calls `tls::ensure_crypto_provider()` first (`rustls-no-provider`
   means `ring` is the only provider this crate installs). A certificate mismatch must
-  stay a distinct `CertMismatch`, never a silent fallback to plain HTTP. The tests cover
-  only malformed PEM input (`client.rs::https_client_rejects_pem_with_no_certificate_marker`,
+  stay a distinct `CertMismatch`, never a silent fallback to plain HTTP. `tests/tls_pin.rs`
+  proves the client side with real handshakes (table above), and it also guards
+  `client.rs::classify_send_error`, which decides `CertMismatch` by matching error text:
+  reword those errors in a `reqwest`/`rustls` bump and the mismatch tests fail. Malformed
+  PEM is covered separately (`client.rs::https_client_rejects_pem_with_no_certificate_marker`,
   `::https_client_rejects_malformed_certificate_body`,
-  `discover.rs::probe_harness_https_rejects_unparseable_cert`). None performs a TLS
-  handshake against a server presenting a different certificate, and
-  `client.rs::classify_send_error` decides `CertMismatch` by matching error text, so
-  re-read both on any `reqwest`/`rustls` bump.
+  `discover.rs::probe_harness_https_rejects_unparseable_cert`). Not covered, by design:
+  discovery. With a pinned certificate present and HTTP fallback allowed (the startup
+  state), `discover::resolve_reachable` still accepts a plain-HTTP listener on the port,
+  and only a prior `CertMismatch` forbids HTTP; `SECURITY.md` documents this as ordinary
+  HTTPS unavailability. Treat any change that widens that fallback as a security change.
 - **`home.rs`**: `CGAGENTHARNESS_HOME` is honored only when absolute with no `..`
   (`is_safe_home`); `harness.json` and `tls/server.pem` reads reject symlinks,
   oversized files, and world-writable files (`mode & 0o002`). Tests cover the symlink,
-  size, relative-path, and dotenv rules (`symlink_harness_json_is_ignored`,
+  size, relative-path, dotenv, and world-writable rules (`symlink_harness_json_is_ignored`,
   `symlink_cert_is_ignored`, `oversized_cert_is_rejected`,
   `relative_home_override_is_ignored`, `env_file_is_never_consulted`,
-  `private_key_in_harness_bundle_is_dropped`). None exercises the world-writable
-  check, and group-writable files and file ownership aren't checked at all.
+  `private_key_in_harness_bundle_is_dropped`, `world_writable_harness_json_is_ignored`,
+  `world_writable_cert_is_ignored`). Group-writable files and file ownership aren't
+  checked at all.
 - **`web_intent.rs`**: only explicit phrases at the start of a message trigger a
   lookup, and private, credentialed, or single-label links are refused before any
   network call (`public_link`, `public_domain`, `public_v4`, `public_v6`; the unit
