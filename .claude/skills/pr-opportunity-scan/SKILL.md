@@ -4,7 +4,7 @@ description: Time-boxed (~3 minute), strictly read-only scan of this repo that e
 disable-model-invocation: true
 argument-hint: "[focus area, e.g. ci | ollama | security | perf | tests | deps]"
 allowed-tools: Read, Grep, Glob, Bash(git status *), Bash(git log *), Bash(git diff *), Bash(git show *), Bash(git ls-files *), Bash(cargo tree *), Bash(cargo metadata *), Bash(wc *)
-disallowed-tools: Edit Write NotebookEdit
+disallowed-tools: Edit, Write, NotebookEdit
 ---
 
 # PR opportunity scan
