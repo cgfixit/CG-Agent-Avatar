@@ -27,8 +27,11 @@ The branch's own change is `git diff <base>...HEAD`; uncommitted work comes from
 `git status`.
 
 ```sh
-cargo test --locked --test source_contracts --test objections --test lsof_argv --test plist_contract --test ci_workflows
+cargo test --locked --lib --test source_contracts --test objections --test lsof_argv --test plist_contract --test ci_workflows
 ```
+
+`--lib` matters: `--test` flags select only integration targets, so without it none of the
+unit tests cited below would run and the gate could look green without checking them.
 
 ## The invariants and what enforces them
 

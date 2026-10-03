@@ -38,7 +38,7 @@ are also ad-hoc signed, not notarized; macOS may require **Open Anyway**.
 
 | Backend | Setup and behavior |
 |---|---|
-| **Direct Ollama (default)** | Start a local service on `http://127.0.0.1:11434` that exposes `/api/tags` and `/v1/chat/completions` and serves `qwen3.8:27b-mlx`. Avatar sends the bundled [Soul prompt](resources/direct-ollama-system.md) and the current message, and asks for a direct answer without a hidden reasoning pass. It does not start Ollama, install a model, or send previous turns. Optional [web lookups](#web-lookups-direct-ollama) run only when you ask for one. |
+| **Direct Ollama (default)** | Start a local service on `http://127.0.0.1:11434` that exposes `/api/tags` and `/v1/chat/completions` and serves `qwen3.8:27b-mlx`, which needs Ollama v0.32.12 or newer (the release that added Qwen 3.8 27B) and, per Ollama's own macOS requirements, macOS 14 or newer. Avatar sends the bundled [Soul prompt](resources/direct-ollama-system.md) and the current message, and asks for a direct answer without a hidden reasoning pass. It does not start Ollama, install a model, or send previous turns. Optional [web lookups](#web-lookups-direct-ollama) run only when you ask for one. |
 | **Harness** | Select **Harness (127.0.0.1:8790)** in the menu. Avatar launches or activates the installed Harness desktop app, then discovers its listener. A headless `cgagentharness serve` instance also works. TLS and account setup are described below. |
 
 The Ollama model tag is fixed in this version. A responding local service alone
