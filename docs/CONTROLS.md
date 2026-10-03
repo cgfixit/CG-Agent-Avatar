@@ -5,7 +5,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Input | Action |
 |---|---|
 | **Talk** | Show the strip, focus the text field (works offline) |
-| **Harness (127.0.0.1:8790)** | Optional. Launches or activates the installed `CG Agent Harness.app` by bundle identifier, then checks the configured port and desktop sidecar for a confirmed status response; HTTPS with a pinned certificate on fresh homes, plain HTTP on legacy homes |
+| **Harness (127.0.0.1:8790)** | Optional. Launches or activates the installed `CG Agent Harness.app` by bundle identifier, then checks the configured port and desktop sidecar for a confirmed status response; HTTPS with a pinned certificate on fresh homes, plain HTTP only on legacy homes with no `tls/server.pem` |
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message via `http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password (native secure text entry), then logs in for later Harness chats |
 | **Harness Password Reset…** | After logging in with a bootstrap password, securely replaces only that authenticated account's password |
@@ -92,6 +92,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
 | Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |
+| `harness asleep` on a home you switched to plain HTTP | A leftover `tls/server.pem` keeps the home on pinned HTTPS and Avatar never falls back to HTTP. Delete that file (and restart Avatar if you also saw a certificate mismatch). |
 | Certificate mismatch | Verify Harness's certificate and home. Status polls read the certificate fresh and recover after pinned HTTPS succeeds. After a rejection, missing certificates and plain HTTP cannot restore readiness; intentionally switching that home to legacy HTTP requires restarting Avatar. Avatar does not offer a certificate bypass or change Keychain trust. |
 | Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. |
 

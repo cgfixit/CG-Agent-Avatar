@@ -191,8 +191,11 @@ fn probe_https_host(pinned: &Client, port: u16, host: &str) -> Result<bool, Clie
     }
 }
 
-/// Try pinned HTTPS before legacy HTTP. Certificate rejection aborts discovery;
-/// ordinary HTTPS unavailability permits HTTP only when the caller allows it.
+/// Try pinned HTTPS before legacy HTTP. Certificate rejection aborts discovery.
+/// A home that has a pinned certificate is a TLS home and never downgrades:
+/// plain HTTP is probed only for a home with no `tls/server.pem`, and then only
+/// when the caller allows it. Otherwise any local process could bind the port
+/// while the real harness is down and receive chat, the CSRF fetch, and login.
 pub fn resolve_reachable(
     preferred: u16,
     pinned_cert: Option<&[u8]>,
@@ -215,6 +218,14 @@ fn resolve_reachable_from_candidates(
     if pinned_cert.is_none() && http_fallback == HttpFallback::Forbidden {
         return Err(ClientError::CertMismatch);
     }
+    // Enforced here, not by the caller's starting state: the status worker
+    // starts `Allowed`, and `Forbidden` there means "rejected, report a
+    // mismatch", which would misreport a TLS home whose harness is just down.
+    let http_fallback = if pinned_cert.is_some() {
+        HttpFallback::Forbidden
+    } else {
+        http_fallback
+    };
     let pinned = pinned_cert
         .map(|cert| pinned_client(preferred, cert))
         .transpose()?;
