@@ -92,6 +92,55 @@ fn bundle_release_runs_on_macos() {
 }
 
 #[test]
+fn bundle_manual_main_release_is_full_and_latest() {
+    let y = bundle_yml();
+    let dispatch = y
+        .split("workflow_dispatch:")
+        .nth(1)
+        .expect("workflow_dispatch trigger");
+    assert!(
+        dispatch.contains("mark_latest:"),
+        "manual dispatch needs a Latest opt-out"
+    );
+    assert!(dispatch.contains("type: boolean"));
+    assert!(
+        dispatch.contains("default: true"),
+        "manual main cuts are Latest unless the dispatcher opts out"
+    );
+
+    let create = y
+        .split("- name: Create GitHub Release")
+        .nth(1)
+        .expect("create release step");
+    assert!(
+        create.contains(
+            "[ \"${GITHUB_EVENT_NAME}\" = \"workflow_dispatch\" ] && [ \"${GITHUB_REF}\" = \"refs/heads/main\" ]"
+        ),
+        "only a manual cut of main may be a full release"
+    );
+    assert!(
+        create.contains("[ \"${MARK_LATEST}\" = \"true\" ]"),
+        "Latest follows the mark_latest input"
+    );
+    assert!(
+        create.contains("release_flags=(--latest=true)"),
+        "non-semver manual tags must set Latest explicitly"
+    );
+    assert!(
+        create.contains("release_flags=(--latest=false)"),
+        "opting out of Latest must not move it"
+    );
+    assert!(
+        create.contains("release_flags=(--prerelease --latest=false)"),
+        "nightly and non-main runs stay prereleases and never Latest"
+    );
+    assert!(
+        !create.contains("--prerelease \\"),
+        "prerelease must not be an unconditional gh release create flag"
+    );
+}
+
+#[test]
 fn builds_and_checks_reject_lockfile_drift() {
     for source in [
         include_str!("../.github/workflows/ci.yml"),

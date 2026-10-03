@@ -30,8 +30,10 @@ toolchain setup, dependency checks, and package validation.
 
 For a downloadable build, merges to `main` produce an Actions → **bundle**
 artifact named `CG-Agent-MacOS-Avatar.zip` with 14-day retention. The same workflow
-publishes prereleases at noon America/New_York when there are new commits, or
-on manual dispatch. [Releases](https://github.com/cgfixit/CG-Agent-Avatar/releases)
+publishes a prerelease at noon America/New_York when there are new commits.
+A manual run from `main` publishes a full release and marks it Latest unless
+that option is unchecked on the dispatch form. A manual run from any other
+branch stays a prerelease. [Releases](https://github.com/cgfixit/CG-Agent-Avatar/releases)
 are also ad-hoc signed, not notarized; macOS may require **Open Anyway**.
 
 ## Choose a backend

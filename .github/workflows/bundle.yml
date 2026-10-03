@@ -1,5 +1,7 @@
-# Darwin .app on every merge to main; GitHub Release daily at noon Eastern
-# and on workflow_dispatch. Pinning:
+# Darwin .app on every merge to main. Noon Eastern publishes a prerelease and
+# never moves GitHub Latest. workflow_dispatch from main publishes a full
+# release and, when mark_latest is true (the default), marks it Latest.
+# Pinning:
 # https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions
 # No pull_request_target. No cancel-in-progress (do not cancel a publish).
 # contents: write only on the release job.
@@ -13,6 +15,11 @@ on:
     - cron: '0 12 * * *'
       timezone: "America/New_York"
   workflow_dispatch:
+    inputs:
+      mark_latest:
+        description: On main, mark the full release as GitHub Latest (uncheck to publish without moving Latest)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -111,13 +118,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          # Event payload, not the inputs context: schedule runs have no inputs.
+          # Boolean inputs arrive as the strings "true" and "false".
+          MARK_LATEST: ${{ github.event.inputs.mark_latest }}
         run: |
           set -euo pipefail
           ls -la release-assets
+          # Tags are manual-* / nightly-*, not semver, so GitHub will not
+          # infer Latest. Set it explicitly. Nightly, and a manual run from
+          # any ref other than main, stays a prerelease and never Latest.
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            if [ "${MARK_LATEST}" = "true" ]; then
+              release_flags=(--latest=true)
+            else
+              release_flags=(--latest=false)
+            fi
+          else
+            release_flags=(--prerelease --latest=false)
+          fi
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "CG-Agent-MacOS-Avatar $TAG" \
             --notes "Ad-hoc signed Apple Silicon .app (not notarized). Commit ${GITHUB_SHA}. Gatekeeper may require Open anyway." \
-            --prerelease \
-            --latest=false \
+            "${release_flags[@]}" \
             release-assets/CG-Agent-MacOS-Avatar.zip
