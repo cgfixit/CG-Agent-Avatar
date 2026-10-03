@@ -79,6 +79,9 @@ tempfile = "3"
 # Dev-only YAML 1.2 parser for workflow contract tests. Default `encoding`
 # feature pulls encoding_rs, which these UTF-8 fixtures never need.
 yaml-rust2 = { version = "0.13.0", default-features = false }
+# Mints throwaway loopback certificates for the TLS pin handshake test. `ring`
+# only: the default features could select aws-lc-rs (C/cmake), which this crate avoids.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
 
 [profile.release]
 strip = true
