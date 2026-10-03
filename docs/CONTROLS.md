@@ -79,7 +79,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | Observation | Check |
 |---|---|
 | `ollama asleep` | Start the local service on `127.0.0.1:11434`; Avatar does not launch it. Confirm it lists the exact fixed model tag. |
-| `pull qwen3.8:27b-mlx` | The service is running, but its model list has no entry named exactly `qwen3.8:27b-mlx`. Other `qwen3.8:27b` variants don't count. Install that tag in the service; the model is not configurable in the menu. |
+| `pull qwen3.8:27b-mlx` | The service is running, but its model list has no entry named exactly `qwen3.8:27b-mlx`. Other `qwen3.8:27b` variants don't count. Install that tag in the service (Ollama older than v0.32.12 doesn't offer it, so update first); the model is not configurable in the menu. |
 | `ollama: ollama took too long to answer…` | The service accepted the request but didn't finish within 12 minutes, often a first load of the ~18 GB model on a busy Mac. Try again once it has loaded. |
 | `ollama: ollama http N: <reason>` | The service rejected the turn and gave its reason. `…not found, try pulling it first` means the tag is listed but its files are missing: pull it again. `server busy` (503) means its queue is full. A 500 about the MLX runner usually means the model couldn't load (memory). |
 | `ollama: ollama returned an empty reply` | The model answered with no text. Send the message again. |

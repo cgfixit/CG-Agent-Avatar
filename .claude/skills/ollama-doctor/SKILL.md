@@ -3,7 +3,7 @@ name: ollama-doctor
 description: Diagnose the Direct Ollama backend end to end - the fixed model tag, the /api/tags readiness check versus what chat actually requests, the bundled Soul system prompt versus a tool-free model, loopback/port rules, and (on a Mac with Ollama running) a live loopback probe - explain "ollama asleep", "ollama http 404", or "pull <model>" symptoms, and walk through enabling web lookups (`web`). Manual only; diagnoses and reports, never edits.
 disable-model-invocation: true
 argument-hint: "[symptom, e.g. \"ollama http 404\" | \"replies ignore persona\" | web | audit]"
-allowed-tools: Read, Grep, Glob, Bash(git log *), Bash(cargo test --locked ollama), Bash(cargo test --locked ollama *), Bash(curl -sS --max-time 5 http://127.0.0.1:11434/api/tags), Bash(curl -sS --max-time 5 http://127.0.0.1:11434/api/status), Bash(uname), Bash(uname *)
+allowed-tools: Read, Grep, Glob, Bash(git log *), Bash(cargo test --locked ollama), Bash(cargo test --locked ollama *), Bash(curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/tags), Bash(curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/status), Bash(uname), Bash(uname *)
 disallowed-tools: Edit, Write, NotebookEdit
 ---
 
@@ -77,14 +77,16 @@ product decision.
 Only if the platform above is `Darwin` and the user agrees:
 
 ```sh
-curl -sS --max-time 5 http://127.0.0.1:11434/api/tags
+curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/tags
 ```
 
-Compare the listed `name` values with `MODEL`, character for character. For the
+The `-w` write-out prints the HTTP status after the body, because `curl -sS` exits 0 on a
+404 or 500 and an empty error body would otherwise look like success. Compare the listed
+`name` values with `MODEL`, character for character. For the
 `web` mode, this second read-only probe also helps:
 
 ```sh
-curl -sS --max-time 5 http://127.0.0.1:11434/api/status
+curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/status
 ```
 
 Newer Ollama builds answer `{"cloud":{"disabled":<bool>,"source":"…"}}` (the route is
@@ -120,8 +122,10 @@ the machine's own `ollama signin` identity. Avatar sends no key, and the daemon 
 any `Authorization` header anyway, so a key in Avatar would do nothing. Walk the user
 through these in order and stop at the first failing step:
 
-1. **Ollama is new enough.** The README and `docs/CONTROLS.md` require 0.18.1 or newer;
-   a 404 from a lookup means the build predates the routes.
+1. **Ollama is new enough.** The web routes need 0.18.1 or newer (README,
+   `docs/CONTROLS.md`), but the fixed chat model `qwen3.8:27b-mlx` first appears in
+   Ollama v0.32.12, so use that as the bar: on an older build lookups can work while
+   chat still can't. A 404 from a lookup means the build predates the routes.
 2. **Signed in.** `ollama signin` links this Mac to an ollama.com account (the free
    tier is enough). A 401 from a lookup means it isn't linked.
 3. **Cloud features on.** Not `OLLAMA_NO_CLOUD=1`; the Ollama app also has a cloud
