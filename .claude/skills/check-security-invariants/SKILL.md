@@ -84,7 +84,12 @@ table above. Read the code, and run the unit test named here.
   just that certificate), never `tls_certs_merge` or `danger_accept_invalid_certs`.
   Every `reqwest` builder calls `tls::ensure_crypto_provider()` first (`rustls-no-provider`
   means `ring` is the only provider this crate installs). A certificate mismatch must
-  stay a distinct `CertMismatch`, never a silent fallback to plain HTTP. `tests/tls_pin.rs`
+  stay a distinct `CertMismatch`, never a silent fallback to plain HTTP, and a home with
+  a pinned certificate must never reach plain HTTP at all: `discover::resolve_reachable`
+  forces the fallback off whenever `pinned_cert` is `Some`, whatever the caller passes
+  (`tests/tls_pin.rs::a_pinned_certificate_never_falls_back_to_plain_http`). Keep that
+  rule in `discover.rs`: `app.rs` starts with the fallback allowed, and a forbidden start
+  there would report `CertMismatch` for a harness that is merely down. `tests/tls_pin.rs`
   proves the client side with real handshakes (table above), and it also guards
   `client.rs::classify_send_error`, which decides `CertMismatch` by matching error text:
   reword those errors in a `reqwest`/`rustls` bump and the mismatch tests fail. Malformed

@@ -94,7 +94,8 @@ without `..` components. It never reads the home's `.env` file.
 
 For a TLS-enabled home, Avatar pins `tls/server.pem` for its HTTPS connection.
 It does not change Keychain trust or disable certificate validation. Keep Avatar
-and Harness pointed at the same home. Legacy HTTP homes remain supported.
+and Harness pointed at the same home. Legacy HTTP homes (no `tls/server.pem`)
+remain supported; a home with that file never falls back to plain HTTP.
 
 For an account-gated home:
 
