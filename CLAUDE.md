@@ -1,8 +1,9 @@
 # CLAUDE.md
 
-Guidance for Claude Code (claude.ai/code) in this repository. The project's rules,
-architecture, commands, and contract-test map live in `AGENTS.md`, which is shared
-with Codex and other agents. It is imported here and is binding:
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+The project's rules, architecture, commands, and contract-test map live in
+`AGENTS.md`, which is shared with Codex and other agents. It is imported here and is binding:
 
 @AGENTS.md
 
@@ -27,3 +28,6 @@ with Codex and other agents. It is imported here and is binding:
   whenever you report a green local gate for a change that touches AppKit code.
 - **Editing these files.** Shared facts go in `AGENTS.md`; only Claude-specific
   wiring belongs here. `/docs-sync` keeps both in step with the source.
+- **Verify before asserting.** Treat doc claims (versions, route lists, test names) as
+  hypotheses until checked against `src/` or `tests/`. Separate "verified by a command I
+  ran" from "inferred" when reporting, and never state macOS CI passed from a Linux run.
