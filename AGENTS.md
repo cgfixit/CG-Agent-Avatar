@@ -96,6 +96,9 @@ layer that can hold it.
   probe client are built per pass and re-pointed at each candidate
   (`Client::rebind`); every `reqwest` client owns a runtime thread, so never
   build one per port.
+  A home with a pinned certificate never downgrades: `resolve_reachable` probes
+  plain HTTP only when there is no `tls/server.pem`, whatever fallback the caller
+  passes.
 - **`ollama.rs`**: the Direct Ollama backend (the default).
   - It talks only to `127.0.0.1:11434`, with its own allowlist:
     `POST /v1/chat/completions`, `GET /api/tags`, and the daemon's
@@ -169,7 +172,7 @@ process spawning, `Info.plist`, or CI.
 | `tests/objections.rs` | SSRF baits rejected, CSRF injection shapes, session IDs shaped like paths, oversized bodies, token redaction in `Debug` |
 | `tests/lsof_argv.rs` | argv-only loopback `lsof`; Ollama and privileged ports skipped |
 | `tests/plist_contract.rs` | bundle ID `com.cgfixit.cg-agent`, `LSUIElement` (no Dock), ATS local networking only |
-| `tests/tls_pin.rs` | the Harness TLS pin with real loopback handshakes (certificates minted at run time with the `rcgen` dev-dependency, `ring` only): the pinned certificate is accepted; a different certificate, or one that doesn't cover loopback, is `CertMismatch`; a plaintext listener is never read |
+| `tests/tls_pin.rs` | the Harness TLS pin with real loopback handshakes (certificates minted at run time with the `rcgen` dev-dependency, `ring` only): the pinned certificate is accepted; a different certificate, or one that doesn't cover loopback, is `CertMismatch`; a plaintext listener is never read, and `discover::resolve_reachable` never returns `Http` for a home with a pinned certificate |
 | `tests/ci_workflows.rs` | every workflow file under `.github/workflows` (discovered, not a fixed list); every step or job `uses` (including unnamed `- uses:` steps) pinned to a full commit SHA; parsed permissions are `contents: read` except `contents: write` on `bundle.yml`'s `release` job (quoted, block, and scalar forms); no `pull_request_target`; pinned cargo-audit; bundle schedule and dispatch; lockfile drift rejected; release toolchain tested on macOS |
 
 ## Doc map (one owner per fact)

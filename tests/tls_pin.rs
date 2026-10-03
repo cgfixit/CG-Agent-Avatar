@@ -163,3 +163,36 @@ fn a_plain_http_listener_is_never_read_by_the_pinned_client() {
         "the pinned client must not accept a plaintext response"
     );
 }
+
+/// A TLS home must never downgrade. The caller (the status worker) starts with
+/// `HttpFallback::Allowed`, so the rule has to live in discovery itself: with a
+/// pinned certificate, a plain listener that merely answers `/api/status` with
+/// harness-shaped JSON (any local process can bind the port while the real
+/// harness is down) is not a harness.
+#[test]
+fn a_pinned_certificate_never_falls_back_to_plain_http() {
+    use cg_agent::discover::{resolve_reachable, HttpFallback, Reachable};
+
+    let port = serve_plain();
+    let cert = mint(&[loopback()]);
+    for fallback in [HttpFallback::Allowed, HttpFallback::Forbidden] {
+        let found = resolve_reachable(port, Some(cert.pem.as_bytes()), fallback);
+        assert!(
+            !matches!(found, Ok(Some(Reachable::Http(_)))),
+            "{fallback:?}: a TLS home reached a plain-HTTP listener: {found:?}"
+        );
+    }
+}
+
+/// The counterpart: no pinned certificate means a legacy HTTP home, and that
+/// still works while the fallback is allowed.
+#[test]
+fn a_home_without_a_certificate_still_reaches_plain_http() {
+    use cg_agent::discover::{resolve_reachable, HttpFallback, Reachable};
+
+    let port = serve_plain();
+    assert!(matches!(
+        resolve_reachable(port, None, HttpFallback::Allowed),
+        Ok(Some(Reachable::Http(found))) if found == port
+    ));
+}
