@@ -3,12 +3,11 @@
 //! in `app.rs` so a new visual identity is a new [`Theme`] value rather than
 //! a hunt through `draw` calls for magic numbers.
 //!
-//! [`CLASSIC`] preserves the app's original geometry and motion, with fixed
-//! dark reply ink for contrast on its white bubble. [`FABLE_PROTOCOL`] is a
-//! second, distinct system built the same
+//! [`CLASSIC`] pairs a padded white reply card with dark ink and the original
+//! lively motion. [`FABLE_PROTOCOL`] is a second, distinct system built the same
 //! way. Pick one per run with `CG_AGENT_THEME=classic` or
 //! `CG_AGENT_THEME=fable-protocol` (see [`active`]); `classic` stays the
-//! default so existing behavior is unchanged unless asked for otherwise.
+//! default.
 //!
 //! This module has no macOS dependency, so it builds and its tests run on
 //! every platform; only `app.rs` (macOS-only) knows how to turn a [`Rgba`]
@@ -44,7 +43,11 @@ pub struct Metrics {
     pub reply_chars_per_line: usize,
     pub see_more_w: f64,
     pub see_more_h: f64,
-    pub input_w: f64,
+    pub padding: f64,
+    pub gap: f64,
+    pub toolbar_h: f64,
+    pub action_w: f64,
+    pub screen_margin: f64,
     pub input_h: f64,
     pub creature_y: f64,
     pub input_y: f64,
@@ -91,14 +94,18 @@ pub const CLASSIC: Theme = Theme {
         strip_h: 200.0,
         creature_h: 88.0,
         bubble_w: 640.0,
-        bubble_h: 112.0,
+        bubble_h: 132.0,
         max_expanded_reply_h: 420.0,
-        reply_line_h: 18.0,
-        reply_chars_per_line: 80,
+        reply_line_h: 20.0,
+        reply_chars_per_line: 72,
         see_more_w: 84.0,
-        see_more_h: 24.0,
-        input_w: 280.0,
-        input_h: 24.0,
+        see_more_h: 28.0,
+        padding: 16.0,
+        gap: 12.0,
+        toolbar_h: 32.0,
+        action_w: 72.0,
+        screen_margin: 16.0,
+        input_h: 30.0,
         creature_y: 8.0,
         input_y: 12.0,
     },
@@ -117,7 +124,7 @@ pub const CLASSIC: Theme = Theme {
     palette: Palette {
         bubble_background: Rgba::new(1.0, 1.0, 1.0, 0.94),
         text_color: Some(Rgba::new(0.08, 0.08, 0.1, 1.0)),
-        font_size: 12.0,
+        font_size: 14.0,
     },
 };
 
@@ -130,14 +137,18 @@ pub const FABLE_PROTOCOL: Theme = Theme {
         strip_h: 220.0,
         creature_h: 96.0,
         bubble_w: 680.0,
-        bubble_h: 128.0,
+        bubble_h: 148.0,
         max_expanded_reply_h: 480.0,
-        reply_line_h: 20.0,
-        reply_chars_per_line: 76,
+        reply_line_h: 22.0,
+        reply_chars_per_line: 70,
         see_more_w: 92.0,
-        see_more_h: 26.0,
-        input_w: 300.0,
-        input_h: 26.0,
+        see_more_h: 30.0,
+        padding: 18.0,
+        gap: 12.0,
+        toolbar_h: 34.0,
+        action_w: 76.0,
+        screen_margin: 18.0,
+        input_h: 32.0,
         creature_y: 10.0,
         input_y: 14.0,
     },
@@ -156,7 +167,7 @@ pub const FABLE_PROTOCOL: Theme = Theme {
     palette: Palette {
         bubble_background: Rgba::new(0.098, 0.098, 0.145, 0.92),
         text_color: Some(Rgba::new(0.925, 0.878, 0.769, 1.0)),
-        font_size: 13.0,
+        font_size: 15.0,
     },
 };
 
@@ -208,15 +219,17 @@ mod tests {
     }
 
     #[test]
-    fn classic_preserves_geometry_and_pairs_white_background_with_dark_ink() {
+    fn classic_keeps_its_motion_with_readable_padded_reply_geometry() {
         let m = CLASSIC.metrics;
         assert_eq!(
             (m.strip_h, m.creature_h, m.bubble_w, m.bubble_h),
-            (200.0, 88.0, 640.0, 112.0)
+            (200.0, 88.0, 640.0, 132.0)
         );
         assert_eq!(CLASSIC.motion.walk_speed, 1.6);
         assert_eq!(CLASSIC.motion.tick_interval, 1.0 / 30.0);
-        assert_eq!(CLASSIC.palette.font_size, 12.0);
+        assert_eq!(CLASSIC.palette.font_size, 14.0);
+        assert!(m.padding >= 16.0);
+        assert!(m.toolbar_h >= m.see_more_h);
         let ink = CLASSIC.palette.text_color.expect("classic reply ink");
         assert!(ink.r < 0.2 && ink.g < 0.2 && ink.b < 0.2);
     }

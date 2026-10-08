@@ -11,16 +11,17 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
-    NSApplicationDelegate, NSBackingStoreType, NSButton, NSColor, NSCompositingOperation,
-    NSControlStateValueOff, NSControlStateValueOn, NSEvent, NSFont, NSForegroundColorAttributeName,
-    NSImage, NSMenu, NSMenuItem, NSPanel, NSScreen, NSScrollView, NSSecureTextField,
-    NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSTextField,
-    NSTextView, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAccessibility, NSAccessibilityButtonRole, NSAlert, NSAlertFirstButtonReturn, NSAppearance,
+    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType, NSBezelStyle,
+    NSButton, NSColor, NSCompositingOperation, NSControlStateValueOff, NSControlStateValueOn,
+    NSEvent, NSFont, NSImage, NSMenu, NSMenuItem, NSPanel, NSScreen, NSScrollView,
+    NSSecureTextField, NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSStatusWindowLevel,
+    NSTextField, NSTextView, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    ns_string, MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSNotification,
-    NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
+    ns_string, MainThreadMarker, NSData, NSNotification, NSObject, NSObjectProtocol, NSPoint,
+    NSRect, NSSize, NSString, NSTimer,
 };
 
 use crate::client::{Client, ClientError, SessionJar, Status};
@@ -113,31 +114,26 @@ impl ReplyPresentation {
 struct OverlayLayout {
     panel: NSRect,
     creature: NSPoint,
-    bubble: NSPoint,
-    scroll: NSPoint,
+    card: NSRect,
+    bubble: NSRect,
     button: NSPoint,
-    input: NSPoint,
-    reply_size: NSSize,
+    close: NSPoint,
+    backend: NSRect,
+    input: NSRect,
+    send: NSPoint,
     text_size: NSSize,
 }
 
 impl OverlayLayout {
     fn content_width(bubble_on: bool, metrics: &theme::Metrics) -> f64 {
-        let theme::Metrics {
-            bubble_w: BUBBLE_W,
-            input_w: INPUT_W,
-            ..
-        } = *metrics;
         if bubble_on {
-            BUBBLE_W.max(cw_offset(metrics) + INPUT_W)
+            metrics.bubble_w
         } else {
             creature_width(metrics)
         }
     }
 
-    // Rebuilt from scratch on every animation tick from flat, non-optional
-    // layout inputs; a builder or config struct would add indirection with
-    // no caller left to simplify for.
+    // `screen` is the usable visibleFrame, excluding the menu bar and Dock.
     #[allow(clippy::too_many_arguments)]
     fn new(
         screen: NSRect,
@@ -149,46 +145,66 @@ impl OverlayLayout {
         text_height: f64,
         metrics: &theme::Metrics,
     ) -> Self {
-        let theme::Metrics {
-            creature_y: CREATURE_Y,
-            creature_h: CREATURE_H,
-            input_y: INPUT_Y,
-            bubble_h: BUBBLE_H,
-            bubble_w: BUBBLE_W,
-            strip_h: STRIP_H,
-            see_more_w: SEE_MORE_W,
-            ..
-        } = *metrics;
-        let creature_y = CREATURE_Y + bob;
-        let bubble_y = CREATURE_Y + CREATURE_H + 4.0 + bob;
-        let bottom = if bubble_on {
-            creature_y.min(INPUT_Y)
+        let m = metrics;
+        let margin = m.screen_margin;
+        let width =
+            Self::content_width(bubble_on, m).min((screen.size.width - margin * 2.0).max(1.0));
+        let card_y = m.creature_h + m.gap;
+        let toolbar_y = card_y + m.padding;
+        let reply_y = toolbar_y + m.toolbar_h + m.gap;
+        let available_reply_h = (screen.size.height - margin * 2.0 - reply_y - m.padding).max(1.0);
+        let visible_reply_h = if reply_expanded {
+            reply_height
         } else {
-            creature_y
-        };
-        let top = if bubble_on {
-            bubble_y
-                + if reply_expanded {
-                    reply_height
-                } else {
-                    BUBBLE_H
-                }
+            m.bubble_h
+        }
+        .min(available_reply_h);
+        let height = if bubble_on {
+            reply_y + visible_reply_h + m.padding
         } else {
-            creature_y + CREATURE_H
+            m.creature_h
         };
-        let strip_y = screen.origin.y + screen.size.height - STRIP_H;
+        let panel_x = x.clamp(margin, (screen.size.width - width - margin).max(margin));
+        let panel_y = if bubble_on {
+            screen.size.height - margin - height
+        } else {
+            screen.size.height - m.strip_h + m.creature_y + bob
+        }
+        .clamp(0.0, (screen.size.height - height).max(0.0));
+        let close_x = width - m.padding - m.action_w;
+        let button_x = close_x - m.gap - m.see_more_w;
+        let input_x = creature_width(m) + m.gap;
+        let send_x = width - m.action_w;
+        let reply_w = (width - m.padding * 2.0).max(1.0);
         Self {
             panel: NSRect::new(
-                NSPoint::new(screen.origin.x + x, strip_y + bottom),
-                NSSize::new(Self::content_width(bubble_on, metrics), top - bottom),
+                NSPoint::new(screen.origin.x + panel_x, screen.origin.y + panel_y),
+                NSSize::new(width, height),
             ),
-            creature: NSPoint::new(0.0, creature_y - bottom),
-            bubble: NSPoint::new(0.0, bubble_y - bottom),
-            scroll: NSPoint::new(0.0, bubble_y - bottom),
-            button: NSPoint::new(BUBBLE_W - SEE_MORE_W - 6.0, bubble_y - bottom + 4.0),
-            input: NSPoint::new(cw_offset(metrics), INPUT_Y - bottom),
-            reply_size: NSSize::new(BUBBLE_W, reply_height),
-            text_size: NSSize::new(BUBBLE_W, text_height),
+            creature: NSPoint::ZERO,
+            card: NSRect::new(
+                NSPoint::new(0.0, card_y),
+                NSSize::new(width, reply_y + visible_reply_h + m.padding - card_y),
+            ),
+            bubble: NSRect::new(
+                NSPoint::new(m.padding, reply_y),
+                NSSize::new(reply_w, visible_reply_h),
+            ),
+            button: NSPoint::new(button_x, toolbar_y),
+            close: NSPoint::new(close_x, toolbar_y),
+            backend: NSRect::new(
+                NSPoint::new(m.padding, toolbar_y + (m.toolbar_h - m.reply_line_h) / 2.0),
+                NSSize::new((button_x - m.padding - m.gap).max(1.0), m.reply_line_h),
+            ),
+            input: NSRect::new(
+                NSPoint::new(input_x, m.input_y),
+                NSSize::new((send_x - m.gap - input_x).max(1.0), m.input_h),
+            ),
+            send: NSPoint::new(send_x, m.input_y),
+            text_size: NSSize::new(
+                reply_w,
+                text_height * (m.bubble_w - m.padding * 2.0) / reply_w,
+            ),
         }
     }
 }
@@ -198,11 +214,15 @@ struct DelegateIvars {
     panel: RefCell<Option<Retained<KeyPanel>>>,
     overlay: RefCell<Option<Retained<OverlayView>>>,
     creature: RefCell<Option<Retained<CreatureView>>>,
+    reply_card: RefCell<Option<Retained<NSTextField>>>,
     bubble: RefCell<Option<Retained<NSTextField>>>,
     reply_scroll: RefCell<Option<Retained<NSScrollView>>>,
     reply_text: RefCell<Option<Retained<NSTextView>>>,
     see_more: RefCell<Option<Retained<NSButton>>>,
     input: RefCell<Option<Retained<NSTextField>>>,
+    send: RefCell<Option<Retained<NSButton>>>,
+    close: RefCell<Option<Retained<NSButton>>>,
+    backend_label: RefCell<Option<Retained<NSTextField>>>,
     harness_item: RefCell<Option<Retained<NSMenuItem>>>,
     ollama_item: RefCell<Option<Retained<NSMenuItem>>>,
     walk: RefCell<Walk>,
@@ -268,6 +288,11 @@ define_class!(
             self.send_chat();
         }
 
+        #[unsafe(method(closeTalk:))]
+        fn close_talk_action(&self, _sender: Option<&AnyObject>) {
+            self.close_talk();
+        }
+
         #[unsafe(method(toggleReply:))]
         fn toggle_reply_action(&self, _sender: Option<&AnyObject>) {
             self.toggle_reply();
@@ -317,6 +342,12 @@ define_class!(
                 NSCompositingOperation::SourceOver,
                 fraction,
             );
+        }
+
+        #[unsafe(method(accessibilityPerformPress))]
+        fn accessibility_perform_press(&self) -> bool {
+            self.ivars().shared.click.store(true, Ordering::SeqCst);
+            true
         }
 
         #[unsafe(method(mouseDown:))]
@@ -428,11 +459,15 @@ impl Delegate {
             panel: RefCell::new(None),
             overlay: RefCell::new(None),
             creature: RefCell::new(None),
+            reply_card: RefCell::new(None),
             bubble: RefCell::new(None),
             reply_scroll: RefCell::new(None),
             reply_text: RefCell::new(None),
             see_more: RefCell::new(None),
             input: RefCell::new(None),
+            send: RefCell::new(None),
+            close: RefCell::new(None),
+            backend_label: RefCell::new(None),
             harness_item: RefCell::new(None),
             ollama_item: RefCell::new(None),
             walk: RefCell::new(Walk {
@@ -474,7 +509,6 @@ impl Delegate {
             creature_h: CREATURE_H,
             see_more_w: SEE_MORE_W,
             see_more_h: SEE_MORE_H,
-            input_w: INPUT_W,
             input_h: INPUT_H,
             ..
         } = active.metrics;
@@ -489,6 +523,7 @@ impl Delegate {
         let item = bar.statusItemWithLength(NSSquareStatusItemLength);
         if let Some(button) = item.button(mtm) {
             button.setImage(Some(&image));
+            button.setToolTip(Some(ns_string!("CG Agent — open the companion menu")));
         }
 
         let menu = NSMenu::new(mtm);
@@ -533,7 +568,7 @@ impl Delegate {
         *self.ivars().ollama_item.borrow_mut() = Some(ollama);
 
         let screen = NSScreen::mainScreen(mtm).expect("screen");
-        let sf = screen.frame();
+        let sf = screen.visibleFrame();
         let layout = OverlayLayout::new(
             sf,
             24.0,
@@ -565,6 +600,17 @@ impl Delegate {
 
         let overlay = OverlayView::new(mtm, NSRect::new(NSPoint::ZERO, layout.panel.size));
         overlay.setWantsLayer(true);
+        // Native control ink and bezels must match the fixed reply surface,
+        // rather than inheriting a conflicting system-wide dark/light mode.
+        let background = active.palette.bubble_background;
+        let appearance_name = unsafe {
+            if background.r + background.g + background.b < 1.5 {
+                NSAppearanceNameDarkAqua
+            } else {
+                NSAppearanceNameAqua
+            }
+        };
+        overlay.setAppearance(NSAppearance::appearanceNamed(appearance_name).as_deref());
         panel.setContentView(Some(&overlay));
 
         let cw = creature_width(&active.metrics);
@@ -576,18 +622,31 @@ impl Delegate {
             creature_img,
             Arc::clone(&self.ivars().shared),
         );
+        creature.setToolTip(Some(ns_string!("Click to talk")));
+        creature.setAccessibilityElement(true);
+        creature.setAccessibilityLabel(Some(ns_string!("Talk to CG Agent")));
+        creature.setAccessibilityRole(Some(unsafe { NSAccessibilityButtonRole }));
         overlay.addSubview(&creature);
 
+        let reply_card = NSTextField::labelWithString(ns_string!(""), mtm);
+        reply_card.setFrame(layout.card);
+        reply_card.setDrawsBackground(true);
+        reply_card.setBackgroundColor(Some(&ns_color(active.palette.bubble_background)));
+        reply_card.setHidden(true);
+        overlay.addSubview(&reply_card);
+
         let bubble = {
-            let b = NSTextField::labelWithString(
+            let b = NSTextField::wrappingLabelWithString(
                 &NSString::from_str(&self.ivars().reply_presentation.borrow().preview),
                 mtm,
             );
-            b.setFrame(NSRect::new(layout.bubble, NSSize::new(BUBBLE_W, BUBBLE_H)));
+            b.setMaximumNumberOfLines(0);
+            b.setFrame(layout.bubble);
             b.setFont(Some(&NSFont::systemFontOfSize(active.palette.font_size)));
             b.setTextColor(Some(&text_color(active)));
-            b.setDrawsBackground(true);
-            b.setBackgroundColor(Some(&ns_color(active.palette.bubble_background)));
+            b.setDrawsBackground(false);
+            b.setSelectable(true);
+            b.setAccessibilityLabel(Some(ns_string!("Reply preview")));
             b.setHidden(true);
             overlay.addSubview(&b);
             b
@@ -597,6 +656,8 @@ impl Delegate {
                 NSTextView::alloc(mtm),
                 NSRect::new(NSPoint::ZERO, NSSize::new(BUBBLE_W, BUBBLE_H)),
             );
+            text.setTextContainerInset(NSSize::new(0.0, 4.0));
+            text.setAccessibilityLabel(Some(ns_string!("Full reply")));
             text.setEditable(false);
             text.setSelectable(true);
             text.setRichText(false);
@@ -609,15 +670,11 @@ impl Delegate {
             text
         };
         let reply_scroll = {
-            let scroll = NSScrollView::initWithFrame(
-                NSScrollView::alloc(mtm),
-                NSRect::new(layout.scroll, layout.reply_size),
-            );
+            let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), layout.bubble);
             scroll.setHasVerticalScroller(true);
             scroll.setHasHorizontalScroller(false);
             scroll.setAutohidesScrollers(true);
-            scroll.setDrawsBackground(true);
-            scroll.setBackgroundColor(&ns_color(active.palette.bubble_background));
+            scroll.setDrawsBackground(false);
             scroll.setDocumentView(Some(&reply_text));
             scroll.setHidden(true);
             overlay.addSubview(&scroll);
@@ -628,7 +685,10 @@ impl Delegate {
                 NSButton::alloc(mtm),
                 NSRect::new(layout.button, NSSize::new(SEE_MORE_W, SEE_MORE_H)),
             );
-            set_reply_button_title(&button, ns_string!("See More"));
+            button.setTitle(ns_string!("See More"));
+            button.setBezelStyle(NSBezelStyle::Push);
+            button.setBordered(true);
+            button.setToolTip(Some(ns_string!("Expand or collapse the full reply")));
             unsafe {
                 button.setTarget(Some(self.as_ref()));
                 button.setAction(Some(sel!(toggleReply:)));
@@ -638,16 +698,18 @@ impl Delegate {
             button
         };
         let input = unsafe {
-            let f = NSTextField::initWithFrame(
-                NSTextField::alloc(mtm),
-                NSRect::new(layout.input, NSSize::new(INPUT_W, INPUT_H)),
-            );
+            let f = NSTextField::initWithFrame(NSTextField::alloc(mtm), layout.input);
             f.setEditable(true);
             f.setSelectable(true);
             f.setEnabled(true);
             f.setBezeled(true);
             f.setDrawsBackground(true);
-            f.setPlaceholderString(Some(ns_string!("Type here, then Return")));
+            f.setPlaceholderString(Some(ns_string!("Ask anything…")));
+            f.setFont(Some(&NSFont::systemFontOfSize(active.palette.font_size)));
+            f.setAccessibilityLabel(Some(ns_string!("Message")));
+            f.setToolTip(Some(ns_string!(
+                "Return to send. Your draft stays here while a reply is pending."
+            )));
             f.setTarget(Some(self.as_ref()));
             f.setAction(Some(sel!(sendChat:)));
             f.setHidden(true);
@@ -655,15 +717,54 @@ impl Delegate {
             f
         };
 
+        let make_button = |title: &NSString, origin: NSPoint, action: Sel| {
+            let button = NSButton::initWithFrame(
+                NSButton::alloc(mtm),
+                NSRect::new(origin, NSSize::new(active.metrics.action_w, INPUT_H)),
+            );
+            button.setTitle(title);
+            button.setBezelStyle(NSBezelStyle::Push);
+            button.setBordered(true);
+            unsafe {
+                button.setTarget(Some(self.as_ref()));
+                button.setAction(Some(action));
+            }
+            button.setHidden(true);
+            overlay.addSubview(&button);
+            button
+        };
+        let send = make_button(ns_string!("Send"), layout.send, sel!(sendChat:));
+        // Send sits over the desktop, outside the fixed reply surface.
+        // Keep its native light bezel and dark label readable in either theme.
+        send.setAppearance(
+            NSAppearance::appearanceNamed(unsafe { NSAppearanceNameAqua }).as_deref(),
+        );
+        send.setToolTip(Some(ns_string!("Send message (Return)")));
+        let close = make_button(ns_string!("Close"), layout.close, sel!(closeTalk:));
+        close.setToolTip(Some(ns_string!("Hide chat and keep your draft and reply")));
+        let backend_label = NSTextField::labelWithString(ns_string!("Direct Ollama"), mtm);
+        backend_label.setFrame(layout.backend);
+        backend_label.setFont(Some(&NSFont::systemFontOfSize(
+            active.palette.font_size - 2.0,
+        )));
+        backend_label.setTextColor(Some(&text_color(active)));
+        backend_label.setAccessibilityLabel(Some(ns_string!("Selected backend")));
+        backend_label.setHidden(true);
+        overlay.addSubview(&backend_label);
+
         *self.ivars().status_item.borrow_mut() = Some(item);
         *self.ivars().panel.borrow_mut() = Some(panel.clone());
         *self.ivars().overlay.borrow_mut() = Some(overlay);
         *self.ivars().creature.borrow_mut() = Some(creature);
+        *self.ivars().reply_card.borrow_mut() = Some(reply_card);
         *self.ivars().bubble.borrow_mut() = Some(bubble);
         *self.ivars().reply_scroll.borrow_mut() = Some(reply_scroll);
         *self.ivars().reply_text.borrow_mut() = Some(reply_text);
         *self.ivars().see_more.borrow_mut() = Some(see_more);
         *self.ivars().input.borrow_mut() = Some(input);
+        *self.ivars().send.borrow_mut() = Some(send);
+        *self.ivars().close.borrow_mut() = Some(close);
+        *self.ivars().backend_label.borrow_mut() = Some(backend_label);
 
         panel.orderFront(None);
 
@@ -808,37 +909,29 @@ impl Delegate {
     }
 
     fn open_talk(&self) {
-        let metrics = theme::active().metrics;
         {
             let mut walk = self.ivars().walk.borrow_mut();
             walk.strip_on = true;
             walk.bubble_on = true;
         }
-        self.apply_layout(OverlayLayout::new(
-            NSScreen::mainScreen(self.mtm()).expect("screen").frame(),
-            self.ivars().walk.borrow().x,
-            0.0,
-            true,
-            false,
-            metrics.bubble_h,
-            metrics.bubble_h,
-            &metrics,
-        ));
+        self.on_tick();
         if let Some(panel) = self.ivars().panel.borrow().as_ref() {
-            panel.orderFront(None);
             panel.makeKeyAndOrderFront(None);
         }
-        if let Some(b) = self.ivars().bubble.borrow().as_ref() {
-            b.setHidden(false);
-        }
         if let Some(i) = self.ivars().input.borrow().as_ref() {
-            i.setHidden(false);
-            let mtm = self.mtm();
-            NSApplication::sharedApplication(mtm).activate();
+            NSApplication::sharedApplication(self.mtm()).activate();
             if let Some(panel) = self.ivars().panel.borrow().as_ref() {
                 let _ = panel.makeFirstResponder(Some(i));
             }
         }
+    }
+
+    fn close_talk(&self) {
+        self.ivars().walk.borrow_mut().bubble_on = false;
+        if let Some(panel) = self.ivars().panel.borrow().as_ref() {
+            let _ = panel.makeFirstResponder(None);
+        }
+        self.on_tick();
     }
 
     fn send_chat(&self) {
@@ -863,8 +956,13 @@ impl Delegate {
         } else {
             self.ivars().shared.guide.lock().unwrap().generation()
         };
-        *self.ivars().shared.pending.lock().unwrap() =
-            Some((backend, generation, trimmed.to_string()));
+        {
+            let mut pending = self.ivars().shared.pending.lock().unwrap();
+            if pending.is_some() || self.ivars().shared.in_flight.load(Ordering::SeqCst) {
+                return;
+            }
+            *pending = Some((backend, generation, trimmed.to_string()));
+        }
         self.ivars().walk.borrow_mut().reply_expanded = false;
         field.setStringValue(ns_string!(""));
         self.open_talk();
@@ -893,8 +991,19 @@ impl Delegate {
             .mood
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        let screen = NSScreen::mainScreen(self.mtm()).expect("screen").frame();
-        let in_flight = self.ivars().shared.in_flight.load(Ordering::Relaxed);
+        let screen = self
+            .ivars()
+            .panel
+            .borrow()
+            .as_ref()
+            .and_then(|panel| panel.screen())
+            .or_else(|| NSScreen::mainScreen(self.mtm()))
+            .expect("screen")
+            .visibleFrame();
+        let in_flight = {
+            let pending = self.ivars().shared.pending.lock().unwrap();
+            pending.is_some() || self.ivars().shared.in_flight.load(Ordering::SeqCst)
+        };
         let mut presentation = self.ivars().reply_presentation.borrow_mut();
         let text_changed = presentation.update(
             &self.ivars().shared.last_reply.lock().unwrap(),
@@ -921,6 +1030,7 @@ impl Delegate {
             - 16.0)
             .max(16.0);
         match mood {
+            _ if walk.bubble_on => {}
             Mood::Thinking | Mood::Asleep => {}
             _ => {
                 walk.x += walk.dir * motion.walk_speed;
@@ -934,6 +1044,7 @@ impl Delegate {
             }
         }
         let bob = match mood {
+            _ if walk.bubble_on => 0.0,
             Mood::Thinking => (walk.t * motion.thinking_bob_freq).sin() * motion.thinking_bob_amp,
             Mood::Talking => motion.talking_bob_offset,
             _ => ((walk.t * motion.idle_bob_freq).sin() * motion.idle_bob_amp).abs(),
@@ -961,23 +1072,51 @@ impl Delegate {
             }
         }
 
-        if bubble_on {
-            if let Some(b) = self.ivars().bubble.borrow().as_ref() {
-                b.setHidden(reply_expanded);
+        if let Some(card) = self.ivars().reply_card.borrow().as_ref() {
+            card.setHidden(!bubble_on);
+        }
+        if let Some(b) = self.ivars().bubble.borrow().as_ref() {
+            b.setHidden(!bubble_on || reply_expanded);
+        }
+        if let Some(scroll) = self.ivars().reply_scroll.borrow().as_ref() {
+            scroll.setHidden(!bubble_on || !reply_expanded);
+        }
+        if let Some(input) = self.ivars().input.borrow().as_ref() {
+            input.setHidden(!bubble_on);
+        }
+        if let Some(send) = self.ivars().send.borrow().as_ref() {
+            send.setHidden(!bubble_on);
+            send.setEnabled(!in_flight);
+        }
+        if let Some(close) = self.ivars().close.borrow().as_ref() {
+            close.setHidden(!bubble_on);
+        }
+        if let Some(label) = self.ivars().backend_label.borrow().as_ref() {
+            label.setHidden(!bubble_on);
+            let backend = if self.ivars().shared.backend.load(Ordering::Relaxed) == BACKEND_HARNESS
+            {
+                "Harness"
+            } else {
+                "Direct Ollama"
+            };
+            let label_text = if in_flight {
+                format!("{backend} · Thinking…")
+            } else {
+                backend.into()
+            };
+            if label.stringValue().to_string() != label_text {
+                label.setStringValue(&NSString::from_str(&label_text));
             }
-            if let Some(scroll) = self.ivars().reply_scroll.borrow().as_ref() {
-                scroll.setHidden(!reply_expanded);
-            }
-            if let Some(button) = self.ivars().see_more.borrow().as_ref() {
-                button.setHidden(in_flight || presentation.raw.is_empty());
-                let title = if reply_expanded {
-                    ns_string!("See Less")
-                } else {
-                    ns_string!("See More")
-                };
-                if !button.title().isEqualToString(title) {
-                    set_reply_button_title(button, title);
-                }
+        }
+        if let Some(button) = self.ivars().see_more.borrow().as_ref() {
+            button.setHidden(!bubble_on || in_flight || presentation.raw.is_empty());
+            let title = if reply_expanded {
+                ns_string!("See Less")
+            } else {
+                ns_string!("See More")
+            };
+            if !button.title().isEqualToString(title) {
+                button.setTitle(title);
             }
         }
     }
@@ -992,20 +1131,38 @@ impl Delegate {
         if let Some(creature) = self.ivars().creature.borrow().as_ref() {
             creature.setFrameOrigin(layout.creature);
         }
-        if let Some(bubble) = self.ivars().bubble.borrow().as_ref() {
-            bubble.setFrameOrigin(layout.bubble);
+        if let Some(card) = self.ivars().reply_card.borrow().as_ref() {
+            card.setFrame(layout.card);
         }
+        if let Some(bubble) = self.ivars().bubble.borrow().as_ref() {
+            bubble.setFrame(layout.bubble);
+        }
+        let mut text_size = layout.text_size;
         if let Some(scroll) = self.ivars().reply_scroll.borrow().as_ref() {
-            scroll.setFrame(NSRect::new(layout.scroll, layout.reply_size));
+            scroll.setFrame(layout.bubble);
+            // The scroller can consume part of the outer viewport. Wrap at
+            // the actual content width so the last glyphs remain readable.
+            let content_width = scroll.contentSize().width.max(1.0);
+            text_size.height *= text_size.width / content_width;
+            text_size.width = content_width;
         }
         if let Some(text) = self.ivars().reply_text.borrow().as_ref() {
-            text.setFrame(NSRect::new(NSPoint::ZERO, layout.text_size));
+            text.setFrame(NSRect::new(NSPoint::ZERO, text_size));
         }
         if let Some(button) = self.ivars().see_more.borrow().as_ref() {
             button.setFrameOrigin(layout.button);
         }
         if let Some(input) = self.ivars().input.borrow().as_ref() {
-            input.setFrameOrigin(layout.input);
+            input.setFrame(layout.input);
+        }
+        if let Some(send) = self.ivars().send.borrow().as_ref() {
+            send.setFrameOrigin(layout.send);
+        }
+        if let Some(close) = self.ivars().close.borrow().as_ref() {
+            close.setFrameOrigin(layout.close);
+        }
+        if let Some(label) = self.ivars().backend_label.borrow().as_ref() {
+            label.setFrame(layout.backend);
         }
     }
 }
@@ -1014,22 +1171,8 @@ fn creature_width(metrics: &theme::Metrics) -> f64 {
     metrics.creature_h * (589.0 / 778.0)
 }
 
-fn cw_offset(metrics: &theme::Metrics) -> f64 {
-    creature_width(metrics) + 8.0
-}
-
 fn ns_color(c: theme::Rgba) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(c.r, c.g, c.b, c.a)
-}
-
-fn set_reply_button_title(button: &NSButton, title: &NSString) {
-    let ink = ns_color(theme::CLASSIC.palette.text_color.unwrap());
-    let attrs: Retained<NSDictionary<_, AnyObject>> = NSDictionary::from_slices(
-        &[unsafe { NSForegroundColorAttributeName }],
-        &[ink.as_ref()],
-    );
-    let attributed = unsafe { NSAttributedString::new_with_attributes(title, &attrs) };
-    button.setAttributedTitle(&attributed);
 }
 
 /// The theme's ink, or the system's adaptive label color when the theme
@@ -1166,7 +1309,7 @@ fn preview_text(reply: &str, in_flight: bool) -> String {
     if in_flight {
         "…thinking".into()
     } else if reply.is_empty() {
-        "type below, Return to send".into()
+        "A little company for your next idea.\nAsk a question below — Return or Send starts the conversation.".into()
     } else {
         display::bubble_text(reply)
     }
@@ -1176,7 +1319,7 @@ fn reply_text(reply: &str, in_flight: bool) -> String {
     if in_flight {
         "…thinking".into()
     } else if reply.is_empty() {
-        "type below, Return to send".into()
+        "A little company for your next idea.\nAsk a question below — Return or Send starts the conversation.".into()
     } else {
         display::expanded_text(reply)
     }
@@ -1371,24 +1514,34 @@ fn spawn_workers(shared: Arc<Shared>) {
                         }
                     }
 
-                    let msg = { shared.pending.lock().unwrap().take() };
+                    let msg = {
+                        let mut pending = shared.pending.lock().unwrap();
+                        let msg = pending.take();
+                        // Publish busy before releasing the queue lock: Return and
+                        // Send must never slip a second message into this handoff.
+                        if msg.is_some() {
+                            shared.in_flight.store(true, Ordering::SeqCst);
+                        }
+                        msg
+                    };
                     if let Some((backend, generation, message)) = msg {
                         if shared.backend.load(Ordering::SeqCst) != backend
                             || shared.guide.lock().unwrap().generation() != generation
                         {
+                            shared.in_flight.store(false, Ordering::SeqCst);
                             continue;
                         }
                         let endpoint = if backend == BACKEND_HARNESS {
                             let guide = shared.guide.lock().unwrap();
                             let Some(endpoint) = guide.ready_endpoint(generation) else {
                                 *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                shared.in_flight.store(false, Ordering::SeqCst);
                                 continue;
                             };
                             Some(endpoint)
                         } else {
                             None
                         };
-                        shared.in_flight.store(true, Ordering::SeqCst);
                         talking_deadline = None;
                         shared.talking.store(false, Ordering::SeqCst);
                         if backend == BACKEND_OLLAMA {
@@ -1643,10 +1796,70 @@ a+VhHbrWdvoCoROeKF3msYiqjFE=
             screen, 100.0, 8.0, true, false, BUBBLE_H, BUBBLE_H, &metrics,
         );
         assert_eq!(talk.panel.size.width, BUBBLE_W);
-        assert_eq!(talk.panel.size.height, BUBBLE_H + CREATURE_H + 8.0);
+        assert_eq!(
+            talk.panel.size.height,
+            BUBBLE_H + CREATURE_H + metrics.gap * 2.0 + metrics.toolbar_h + metrics.padding * 2.0
+        );
         assert_eq!(talk.creature.x, 0.0);
-        assert!(talk.input.y >= 0.0);
-        assert!(talk.bubble.y + BUBBLE_H <= talk.panel.size.height);
+        assert!(talk.input.origin.y >= 0.0);
+        assert!(talk.bubble.origin.y + BUBBLE_H <= talk.panel.size.height);
+        assert!(idle.card.size.height > 0.0);
+        assert!(talk.button.y + metrics.see_more_h < talk.bubble.origin.y);
+        assert!(talk.close.y + metrics.input_h < talk.bubble.origin.y);
+        assert!(talk.backend.origin.y + talk.backend.size.height < talk.bubble.origin.y);
+        assert!(talk.input.origin.x + talk.input.size.width < talk.send.x);
+    }
+
+    #[test]
+    fn expanded_chat_stays_inside_visible_frames_with_negative_origins() {
+        for metrics in [theme::CLASSIC.metrics, theme::FABLE_PROTOCOL.metrics] {
+            for screen in [
+                NSRect::new(NSPoint::new(0.0, 48.0), NSSize::new(1440.0, 828.0)),
+                NSRect::new(NSPoint::new(-1680.0, -120.0), NSSize::new(1680.0, 970.0)),
+                NSRect::new(NSPoint::new(100.0, 200.0), NSSize::new(600.0, 480.0)),
+            ] {
+                for x in [-100.0, 100.0, screen.size.width + 100.0] {
+                    let layout = OverlayLayout::new(
+                        screen,
+                        x,
+                        8.0,
+                        true,
+                        true,
+                        metrics.max_expanded_reply_h,
+                        2_000.0,
+                        &metrics,
+                    );
+                    assert!(layout.panel.origin.x >= screen.origin.x);
+                    assert!(layout.panel.origin.y >= screen.origin.y);
+                    assert!(
+                        layout.panel.origin.x + layout.panel.size.width
+                            <= screen.origin.x + screen.size.width
+                    );
+                    assert!(
+                        layout.panel.origin.y + layout.panel.size.height
+                            <= screen.origin.y + screen.size.height
+                    );
+                    assert!(
+                        layout.bubble.origin.y + layout.bubble.size.height
+                            < layout.panel.size.height
+                    );
+                    assert!(layout.text_size.height > layout.bubble.size.height);
+                    assert!(layout.button.y + metrics.see_more_h < layout.bubble.origin.y);
+                    assert!(layout.input.origin.x + layout.input.size.width < layout.send.x);
+                    let without_bob = OverlayLayout::new(
+                        screen,
+                        x,
+                        0.0,
+                        true,
+                        true,
+                        metrics.max_expanded_reply_h,
+                        2_000.0,
+                        &metrics,
+                    );
+                    assert_eq!(layout.panel, without_bob.panel);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1676,7 +1889,7 @@ a+VhHbrWdvoCoROeKF3msYiqjFE=
     fn unchanged_reply_does_not_replace_native_text_on_animation_ticks() {
         let metrics = theme::CLASSIC.metrics;
         let mut presentation = ReplyPresentation::new(&metrics);
-        assert_eq!(presentation.preview, "type below, Return to send");
+        assert_eq!(presentation.preview, "A little company for your next idea.\nAsk a question below — Return or Send starts the conversation.");
         assert!(presentation.update("a completed reply", false, &metrics));
         for _ in 0..60 {
             assert!(!presentation.update("a completed reply", false, &metrics));
@@ -1689,7 +1902,7 @@ a+VhHbrWdvoCoROeKF3msYiqjFE=
         assert!(presentation.update("a completed reply", false, &metrics));
         assert_eq!(presentation.full, "a completed reply");
         assert!(presentation.update("", false, &metrics));
-        assert_eq!(presentation.full, "type below, Return to send");
+        assert_eq!(presentation.full, "A little company for your next idea.\nAsk a question below — Return or Send starts the conversation.");
     }
 
     #[test]
