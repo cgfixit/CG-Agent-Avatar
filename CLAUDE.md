@@ -10,24 +10,23 @@ The project's rules, architecture, commands, and contract-test map live in
 ## Claude Code specifics
 
 - **Slash commands.** Every folder in `.claude/skills/` is a `/<name>` command.
-  - `/pr-opportunity-scan`, `/ollama-doctor`, and `/docs-sync` are manual only
-    (`disable-model-invocation: true`). Claude never loads them on its own.
-  - `/add-avatar-feature`, `/check-security-invariants`, and `/rust-optimize` can also
-    trigger automatically from their descriptions.
-  - Pair `/check-security-invariants` with the built-in `/security-review` on any
-    networking, auth, or CI change.
+  `/pr-opportunity-scan`, `/ollama-doctor`, and `/docs-sync` are manual only
+  (`disable-model-invocation: true`); the other three can also trigger from their
+  descriptions. Pair `/check-security-invariants` with the built-in
+  `/security-review` on any networking, auth, or CI change.
 - **Permissions.** `.claude/settings.json` pre-approves `./scripts/ci.sh`, the
   underlying `cargo fmt`/`clippy`/`test`/`check`/`build`/`fetch`/`tree`/`deny`
   commands, and read-only git. It denies reading `.env` files. Put personal
   additions in `.claude/settings.local.json` (gitignored).
-- **Web sessions.** `.claude/hooks/session-start.sh` installs the pinned 1.88
-  toolchain before the session starts, then warms the crate cache and test build in
-  the background (log: `$CARGO_WARM_LOG`). If the first `cargo` command prints
-  `Blocking waiting for file lock`, that is the warm-up finishing, not a hang.
-- **Linux vs macOS.** Web sessions run Linux, so `app.rs` is not compiled. Say so
-  whenever you report a green local gate for a change that touches AppKit code.
+- **Web sessions.** `.claude/hooks/session-start.sh` runs only when
+  `CLAUDE_CODE_REMOTE=true`. It installs the pinned 1.88 toolchain before the
+  session starts, then warms the crate cache and test build in the background
+  (log: `$CARGO_WARM_LOG`). A first `cargo` command that prints
+  `Blocking waiting for file lock` is waiting on that warm-up, not hanging.
+- **Linux vs macOS.** Web sessions run Linux, so `app.rs` is not compiled; say so
+  whenever you report a green local gate for an AppKit change.
 - **Editing these files.** Shared facts go in `AGENTS.md`; only Claude-specific
-  wiring belongs here. `/docs-sync` keeps both in step with the source.
-- **Verify before asserting.** Treat doc claims (versions, route lists, test names) as
-  hypotheses until checked against `src/` or `tests/`. Separate "verified by a command I
-  ran" from "inferred" when reporting, and never state macOS CI passed from a Linux run.
+  wiring belongs here (`/docs-sync` keeps both current).
+- **Verify before asserting.** Treat doc claims (versions, routes, test names) as
+  hypotheses until checked against `src/` or `tests/`, and separate "verified by a
+  command I ran" from "inferred".
