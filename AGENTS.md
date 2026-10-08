@@ -20,7 +20,9 @@ User-facing behavior is in `README.md`, and the threat model is in `SECURITY.md`
 ## Commands
 
 ```sh
-./scripts/ci.sh                                   # fmt + Clippy -D warnings + all tests (+ cargo-deny if installed)
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+./scripts/ci.sh                                   # full suite: only when explicitly requested locally
 cargo test --locked --test source_contracts       # one integration test file
 cargo test --locked some_test_name                # one test by name
 cargo deny --locked check                         # advisories/licenses/sources; config in deny.toml
@@ -41,6 +43,22 @@ Linux, which includes Claude Code on the web and Codex cloud, `src/app.rs` and t
 portable module and contract test but **cannot prove that an AppKit change
 compiles**. Say so in any PR that touches `app.rs`, and never claim macOS CI passed
 until it has.
+
+## Local verification
+
+- **Run the changed code.** Exercise the affected command, API, library path, or
+  native UI with meaningful inputs; inspect output and side effects. Compilation
+  or launch alone does not verify behavior.
+- **Do not run full local test suites unless the user explicitly requests them.**
+  Use only checks tied to the change. A focused test is appropriate when direct
+  execution cannot cover a concrete risk; explain that reason. This rule takes
+  precedence over broader local-suite instructions in repository skills.
+- Prefer formatting, linting, type checks, and targeted builds where appropriate.
+  For GitHub Actions changes, lint the workflows and inspect the scripts they
+  invoke. Leave broad regression and platform coverage to GitHub Actions.
+- Preserve and update relevant regression tests for hosted CI. Report direct
+  execution, static checks, native UI verification, and hosted CI separately;
+  skipped or unavailable checks are not passes.
 
 ## Architecture
 
@@ -214,8 +232,7 @@ permissions, the `.env` read denial, and the web-session SessionStart hook.
 - Codex reads this file natively; no nested `AGENTS.md` exists to override it.
 - Skills are discovered through `.agents/skills`; auto-invocable ones may trigger
   from their `description`.
-- Codex cloud and sandboxed runs are Linux (platform caveat above). Run
-  `./scripts/ci.sh` before proposing a change; a missing `cargo-deny` prints an
-  explicit skip and CI still enforces it.
+- Check the actual host: Codex cloud runs on Linux, while local sandboxed runs
+  may be macOS. Apply the platform caveat above and the local verification rules.
 - Nothing in `.claude/settings.json` or the hook applies to Codex; follow the hard
   rules directly.

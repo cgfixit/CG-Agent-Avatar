@@ -11,7 +11,8 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | **Harness Password Reset…** | After logging in with a bootstrap password, securely replaces only that authenticated account's password |
 | **Quit CG-Agent-MacOS-Avatar** | Terminate |
 | Click the creature | Same as Talk |
-| Type, Return | Send. Reply appears in the bubble **above** the avatar |
+| Type, Return or **Send** | Send. Reply appears in the bubble **above** the avatar; while a request is busy, the next draft stays in the field |
+| **Close** | Hide the chat and let the creature roam again; reopening preserves the draft, reply, and expansion state |
 | `search the web for …`, `look up …`, `google …` | Direct Ollama runs one web search first, then answers from the results. See [Web lookups](#web-lookups-direct-ollama) |
 | `read <link>`, `summarize <link>` | Direct Ollama reads that one public page first, then answers from it |
 | **See More** | Expand a reply into a scrollable pane; **See Less** collapses it |
@@ -25,6 +26,8 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | A reply used the web | Bubble appends a compact `[via web ×N]` note. For Harness, N counts Harness's own web tool calls. For Direct Ollama it is `×1`, the lookup you asked for. Avatar never fetches pages itself |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
+The Send button is unavailable while a message is queued or being answered;
+you can keep typing the next draft. The panel identifies the selected backend.
 Direct Ollama sends only the current message plus the bundled system prompt,
 and the results of one lookup when you ask for one. It asks for a direct answer
 with no hidden reasoning pass (`reasoning_effort: "none"`) and Qwen's published
@@ -40,9 +43,18 @@ the new-password prompt's **OK** submits the change. **Cancel** leaves it
 unchanged. Avatar checks status again before enabling chat. Account sessions
 last only for the running Avatar process.
 
-The overlay follows the creature but only covers the creature, bubble, and text field. Clicks elsewhere in that horizontal band go to the app underneath.
+The creature roams while chat is closed. Opening chat holds the panel still so
+the field and reply do not move while you type, select text, or scroll. The panel
+fits within the screen's usable area, clear of the menu bar and Dock. Closing
+chat resumes the creature's movement. Empty overlay space passes clicks through
+to the app underneath.
 
-The initial reply bubble is 640×112 points under the default **Classic** theme. Expanded replies remain plain text and can scroll when longer than the available panel height. The preview caps at 400 characters and the expanded text at 8,000, with an ellipsis at the limit. Classic expansion caps at 420 points; Fable Protocol caps at 480.
+Replies have padded text and a separate toolbar for **See More** / **See Less**
+and **Close**, so controls do not cover the answer. Expanded replies remain
+selectable plain text and scroll when longer than the available height. The
+preview caps at 400 characters and the expanded text at 8,000, with an ellipsis
+at the limit. Classic expansion caps at 420 points; Fable Protocol caps at 480,
+with a smaller viewport when screen space requires it.
 
 ## Web lookups (Direct Ollama)
 

@@ -1,22 +1,22 @@
 # Native screenshots
 
-These JPEGs replace the README's earlier screenshots. They are unedited
-app-window captures taken through Computer Use (`@oai/sky`), with no desktop,
+These JPEGs show the updated chat panel. They are unedited
+app-window captures taken through Computer Use (`cua_repl`), with no desktop,
 account details, credentials, or unrelated windows included.
 
 | Property | Capture |
 |---|---|
-| Date | September 27, 2026 |
-| Source revision | `a8fa9bcfd3aa4c4cdcc1e253d63d9b6e392a92db` (main) plus the reply-button contrast change in this branch |
-| Platform | Apple Silicon, macOS 27.0 (26A428) |
+| Date | October 8, 2026 |
+| Source revision | `e19534ed834a403c54f715e596362d0f767c163c` |
+| Platform | Apple Silicon, macOS 27.0.1 |
 | Build | `./scripts/package-app.sh`, Rust 1.88 toolchain, ad-hoc signed |
-| Executable SHA-256 | `6ed614e4e598dbc80ec02df057daa0e50c324adafeb4e867ed9254645bb8fec5` |
+| Executable SHA-256 | `e9d55852b0ca6da3f13dc85612f9b4133d3b0252bc60ef3b95cd7244a39d3031` |
 | Theme/backend | Classic / live Direct Ollama, fixed model tag `qwen3.8:27b-mlx` |
 | Harness home | Empty, isolated temporary directory |
-| Prompts | A five-step coding checklist in the compact capture; an eight-step debugging checklist in the expanded capture |
+| Prompts | Three small ways to start a project (under 45 words); an 18-step debugging checklist with two short sentences per step |
 
-- [`classic-reply.jpg`](classic-reply.jpg): completed five-step reply in the compact bubble.
-- [`expanded-reply.jpg`](expanded-reply.jpg): an eight-step reply after **See More**.
+- [`classic-reply.jpg`](classic-reply.jpg): completed reply with backend context, separate reply controls, and the wider composer.
+- [`expanded-reply.jpg`](expanded-reply.jpg): a long reply after **See More**, wrapped within the scroll view's content width.
 
 The reply is live model output, so wording varies between runs. These images
 show native rendering and a working local chat request; they do not establish
