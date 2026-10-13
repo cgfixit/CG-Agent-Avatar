@@ -86,6 +86,9 @@ const NOT_A_COMMAND: &[&str] = &[
 pub enum Intent {
     /// Plain local chat. No web access.
     Chat,
+    /// Looks like a search request but is too thin to act on (a bare verb with
+    /// a one-word object). Answer locally and offer the explicit phrasing.
+    Offer(String),
     /// Search the web for this query.
     Search(String),
     /// Read this public page.
@@ -104,7 +107,8 @@ pub fn parse(message: &str) -> Intent {
     }
     match search_gate(rest) {
         Gate::Run(query) => Intent::Search(query),
-        Gate::Ask | Gate::Skip => Intent::Chat,
+        Gate::Ask(query) => Intent::Offer(query),
+        Gate::Skip => Intent::Chat,
     }
 }
 
@@ -113,7 +117,7 @@ enum Gate {
     /// Unmistakable: run the search.
     Run(String),
     /// Command-shaped but ambiguous (a bare verb with a one-word object).
-    Ask,
+    Ask(String),
     /// Not a search request.
     Skip,
 }
@@ -141,7 +145,7 @@ fn search_gate(rest: &str) -> Gate {
     if names_the_web || words.next().is_some() {
         Gate::Run(query)
     } else {
-        Gate::Ask
+        Gate::Ask(query)
     }
 }
 
@@ -421,13 +425,23 @@ mod tests {
             "google doesn't mean what it used to",
             "Search the web is slow today",
             "web search can be creepy",
-            // Ambiguous one-word objects after a bare verb stay local too.
-            "search for meaning",
-            "google rust",
-            "look up serendipity",
         ] {
             assert_eq!(parse(msg), Intent::Chat, "{msg}");
         }
+    }
+
+    #[test]
+    fn thin_bare_requests_are_offered_not_run() {
+        for (msg, q) in [
+            ("search for meaning", "meaning"),
+            ("google rust", "rust"),
+            ("Please look up serendipity?", "serendipity"),
+        ] {
+            assert_eq!(parse(msg), Intent::Offer(q.to_string()), "{msg}");
+        }
+        // Statements are never offered a search.
+        assert_eq!(parse("google is great"), Intent::Chat);
+        assert_eq!(parse("look up to me"), Intent::Chat);
     }
 
     #[test]

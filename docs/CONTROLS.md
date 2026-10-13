@@ -69,7 +69,10 @@ and a leading "please", "hey", "ok", "can you", or "could you" is ignored.
 
 Three checks keep ordinary sentences local. After a bare `search for`, `look up`,
 or `google` the request needs at least two words ("google rust 1.90 release
-date"); the phrases that name the web (`search the web for …`) need one. A
+date"); the phrases that name the web (`search the web for …`) need one. A bare
+verb with a one-word object ("google rust") is answered locally, and the reply
+ends with `Answered on this Mac only. To look it up online, say: search the web
+for rust`; nothing is sent until you do. A
 following `is`, `was`, `to`, `at`, `and` and similar words mark a statement
 ("Google is a company…", "look up to your parents"), which stays local. A link
 has to be the object of the read verb, so "open question: why does https://…
@@ -106,7 +109,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | `ollama: web lookup unavailable (http 403)…` | Ollama's cloud features are turned off (`OLLAMA_NO_CLOUD` or its settings). Turn them on to allow lookups. |
 | `ollama: web lookup unavailable (http 429)…` or `(http 5xx)…` | Ollama's web service is rate limiting, or Ollama couldn't reach it. Check the connection and try again later. |
 | `ollama: can't read that link…` | Only public `http(s)` pages can be read. Refused: `localhost`, private or link-local IPs, `.local` names, single-word hosts, and links with embedded passwords. |
-| A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama) and give it a full request ("search the web for rust" or "google rust 1.90 release date"). Plain questions and one-word bare requests stay local. |
+| A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama) and give it a full request ("search the web for rust" or "google rust 1.90 release date"). Plain questions stay local, and a one-word bare request is answered locally with an offer to search; say it the way the offer reads. |
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
 | Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |

@@ -201,6 +201,11 @@ impl Ollama {
         let message = validate::message(message)?;
         let (context, sent) = match web_intent::parse(message) {
             Intent::Chat => return self.complete(message),
+            // Too thin to send anywhere: answer here, then offer the phrase
+            // that would search. Nothing leaves the machine.
+            Intent::Offer(query) => {
+                return Ok(display::with_search_offer(&self.complete(message)?, &query))
+            }
             Intent::RefusedLink => return Err(OllamaError::LinkRefused),
             Intent::Search(query) => (
                 search_context(&query, &self.web_search(&query)?),
@@ -763,6 +768,26 @@ mod tests {
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(o.chat("what's new in rust?").unwrap(), "yo");
+        search.assert();
+        fetch.assert();
+    }
+
+    #[test]
+    fn a_thin_search_request_is_answered_locally_with_an_offer() {
+        let mut server = mockito::Server::new();
+        let search = server.mock("POST", POST_WEB_SEARCH).expect(0).create();
+        let fetch = server.mock("POST", POST_WEB_FETCH).expect(0).create();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json_reply("An oxide."))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert_eq!(
+            o.chat("google rust").unwrap(),
+            "An oxide.\n\nAnswered on this Mac only. To look it up online, say: search the web for rust"
+        );
         search.assert();
         fetch.assert();
     }
