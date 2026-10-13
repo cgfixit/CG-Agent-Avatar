@@ -93,13 +93,12 @@ untrusted text: it goes through `display.rs` before it reaches the screen.
 
 ## 6. Before calling it done
 
-1. Run the changed code with meaningful inputs, then `cargo fmt --all -- --check`,
-   `cargo clippy --locked --all-targets --all-features -- -D warnings`, and the tests
-   tied to the change (`cargo test --locked --test source_contracts`, plus
-   `lsof_argv` / `plist_contract` if you touched `discover.rs` or bundle metadata).
-   `./scripts/ci.sh` is for when the user asks for the full suite (AGENTS.md "Local
-   verification"). The contract tests are cheap `include_str!` source-grep assertions
-   and the repo's actual enforcement mechanism; a new invariant earns one in that style.
+1. Run `./scripts/ci.sh`. Then re-read `tests/source_contracts.rs` and, if you touched
+   `discover.rs` or bundle metadata, `tests/lsof_argv.rs` / `tests/plist_contract.rs`.
+   These are cheap `include_str!` source-grep assertions, and this repo leans on them
+   as the actual enforcement mechanism for its invariants, not as optional style
+   checks. If your feature adds a new invariant worth protecting the same way, add a
+   test in that style rather than relying on review to catch regressions later.
 2. Docs follow code (AGENTS.md hard rule 8): rewrite the owning doc in place, per the doc
    map in `AGENTS.md`. `/docs-sync --check` lists what drifted.
 3. If the change touches networking, auth, discovery, `Info.plist`, or workflows, run
