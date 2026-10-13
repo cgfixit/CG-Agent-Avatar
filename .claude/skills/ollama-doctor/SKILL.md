@@ -36,8 +36,9 @@ Read `src/ollama.rs` top to bottom and record:
 - the `OllamaError` variants and their `Display` strings; note any variant that
   nothing constructs.
 
-Then grep `src/app.rs` for `tags_ok`, `OllamaError::`, and `11434` to see how each
-error becomes user-facing text, and check that `discover.rs` excludes `OLLAMA_PORT`.
+Then grep `src/app.rs` for `tags_ok`, `OllamaError::`, and `last_reply` to see how each
+error becomes bubble text (`ollama asleep`, `pull <MODEL>`, or `ollama: <Display>`),
+and check that `discover.rs` excludes `OLLAMA_PORT`.
 
 ## 2. Consistency checks (each one is pass/fail with `file:line`)
 

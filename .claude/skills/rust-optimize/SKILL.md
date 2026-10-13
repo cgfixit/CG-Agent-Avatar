@@ -35,8 +35,8 @@ only. Say so when a change touches `app.rs`.
 ## 2. What actually matters in this codebase, in priority order
 
 1. **Main-thread blocking.** `client.rs`, `ollama.rs`, and `discover.rs` use
-   *blocking* `reqwest` on purpose (`Cargo.toml`: no async runtime, `blocking`
-   feature only). Any network call reachable from `app.rs` must run like the existing
+   *blocking* `reqwest` on purpose (`Cargo.toml`: the `blocking` feature, no async
+   runtime of the crate's own). Any network call reachable from `app.rs` must run like the existing
    chat/status calls, off the thread that owns the `NSApplication` run loop, never
    inline in a menu action handler. A "faster" change that moves a call onto the main
    thread is a regression; check `app.rs` (`spawn_workers`) for the dispatch pattern

@@ -67,11 +67,11 @@ long, speculative one.
   broader than `contents: read` outside the release job.
 - The tool versions in `docs/BUILD.md` match the workflow YAML (cargo-audit,
   cargo-deny, Rust 1.88).
-- Scheduled coverage: `grep -n "schedule:" .github/workflows/*.yml`. While `ci.yml`
-  and `audit.yml` run only on push and pull_request, a new advisory or a yanked crate
-  (`deny.toml` has `yanked = "deny"`) shows up as a red `cargo-deny` on the next
-  unrelated PR instead of on `main`. A scheduled job here must keep `contents: read`
-  and SHA-pinned actions (`tests/ci_workflows.rs`).
+- Scheduled coverage: `grep -n "schedule:" .github/workflows/*.yml`. Only `bundle.yml`
+  is scheduled, so a new advisory or a yanked crate (`deny.toml` has `yanked = "deny"`)
+  shows up as a red `cargo-deny` on the next unrelated PR instead of on `main`. A
+  scheduled audit must keep `contents: read`, a `concurrency` group, and SHA-pinned
+  actions (`tests/ci_workflows.rs`).
 
 **Dependencies**
 - `cargo tree -d --locked` for duplicate major versions worth consolidating.
@@ -89,7 +89,8 @@ long, speculative one.
 
 **Performance**
 - Blocking I/O reachable from AppKit callbacks in `app.rs` outside the worker-thread
-  pattern (`std::thread::spawn`). See the `rust-optimize` skill for the priorities.
+  pattern (`spawn_workers`: the `cg-agent-status` and `cg-agent-chat` threads). See
+  the `rust-optimize` skill for the priorities.
 - A `reqwest` client rebuilt per request, or per timer tick, where one could be reused.
 - A blocking call without a deadline on the `cg-agent-status` thread, which also
   derives the creature's mood (`discover::lsof_stdout` has none; see `rust-optimize`).

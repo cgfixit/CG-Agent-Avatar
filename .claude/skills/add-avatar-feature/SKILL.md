@@ -82,7 +82,7 @@ removes a control.
   state, no AppKit); follow its `Mood` enum and `MoodInput` struct.
 - A new visual identity or token goes in `theme.rs`, as a new `Theme` value or field,
   not as inline constants in `app.rs`; `CG_AGENT_THEME` selects between shipped
-  themes at runtime.
+  themes once at launch (`theme::active`).
 - Only the `NSMenuItem`/view wiring goes in `app.rs`, following the existing
   `NSMenuItem::initWithTitle_action_keyEquivalent` pattern. Network calls run on the
   worker threads, never on the `NSApplication` run loop.
