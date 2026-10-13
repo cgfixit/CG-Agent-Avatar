@@ -1,6 +1,8 @@
 # Darwin .app on every merge to main. Noon Eastern publishes a prerelease and
 # never moves GitHub Latest. workflow_dispatch from main publishes a full
-# release and, when mark_latest is true (the default), marks it Latest.
+# release and, when mark_latest is true (the default), marks it Latest; an
+# optional `notes` input is appended to the release notes. Every build is
+# smoke-checked (arm64, bundle ID, ad-hoc signature) and ships a SHA-256 file.
 # Pinning:
 # https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions
 # No pull_request_target. No cancel-in-progress (do not cancel a publish).
@@ -20,6 +22,10 @@ on:
         description: On main, mark the full release as GitHub Latest (uncheck to publish without moving Latest)
         type: boolean
         default: true
+      notes:
+        description: Optional release notes, appended below the standard verification steps
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -49,18 +55,32 @@ jobs:
       - name: Package .app
         run: ./scripts/package-app.sh
 
+      - name: Smoke-check .app
+        run: |
+          set -euo pipefail
+          app=dist/CG-Agent-MacOS-Avatar.app
+          archs=$(lipo -archs "$app/Contents/MacOS/cg-agent")
+          [ "$archs" = "arm64" ] || { echo "expected arm64, got: $archs"; exit 1; }
+          id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
+          [ "$id" = "com.cgfixit.cg-agent" ] || { echo "unexpected bundle id: $id"; exit 1; }
+          codesign --verify --strict --verbose=2 "$app"
+
       - name: Zip .app
         run: |
           set -euo pipefail
           ditto -c -k --keepParent dist/CG-Agent-MacOS-Avatar.app \
             dist/CG-Agent-MacOS-Avatar.zip
-          ls -la dist/CG-Agent-MacOS-Avatar.zip
+          (cd dist && shasum -a 256 CG-Agent-MacOS-Avatar.zip > CG-Agent-MacOS-Avatar.zip.sha256)
+          ls -la dist/CG-Agent-MacOS-Avatar.zip dist/CG-Agent-MacOS-Avatar.zip.sha256
+          cat dist/CG-Agent-MacOS-Avatar.zip.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: CG-Agent-MacOS-Avatar
-          path: dist/CG-Agent-MacOS-Avatar.zip
+          path: |
+            dist/CG-Agent-MacOS-Avatar.zip
+            dist/CG-Agent-MacOS-Avatar.zip.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -121,6 +141,8 @@ jobs:
           # Event payload, not the inputs context: schedule runs have no inputs.
           # Boolean inputs arrive as the strings "true" and "false".
           MARK_LATEST: ${{ github.event.inputs.mark_latest }}
+          # Passed through env, never interpolated into the script body.
+          USER_NOTES: ${{ github.event.inputs.notes }}
         run: |
           set -euo pipefail
           ls -la release-assets
@@ -136,9 +158,20 @@ jobs:
           else
             release_flags=(--prerelease --latest=false)
           fi
+          {
+            echo "Ad-hoc signed Apple Silicon .app (not notarized). Commit ${GITHUB_SHA}."
+            echo
+            echo "Verify the download: \`shasum -a 256 -c CG-Agent-MacOS-Avatar.zip.sha256\`"
+            echo "Gatekeeper may require Open Anyway (System Settings > Privacy & Security)."
+            if [ -n "${USER_NOTES:-}" ]; then
+              echo
+              printf '%s\n' "$USER_NOTES"
+            fi
+          } > release-notes.md
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "CG-Agent-MacOS-Avatar $TAG" \
-            --notes "Ad-hoc signed Apple Silicon .app (not notarized). Commit ${GITHUB_SHA}. Gatekeeper may require Open anyway." \
+            --notes-file release-notes.md \
             "${release_flags[@]}" \
-            release-assets/CG-Agent-MacOS-Avatar.zip
+            release-assets/CG-Agent-MacOS-Avatar.zip \
+            release-assets/CG-Agent-MacOS-Avatar.zip.sha256

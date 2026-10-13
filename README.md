@@ -31,11 +31,12 @@ The repository selects Rust 1.88. The app is ad-hoc signed and **not notarized**
 macOS may require **Open Anyway**. [Build and verification](docs/BUILD.md) covers
 prerequisites, toolchain setup, and package validation.
 
-Download builds from [Releases](https://github.com/cgfixit/CG-Agent-Avatar/releases).
+Download builds from [Releases](https://github.com/cgfixit/CG-Agent-Avatar/releases). Each release carries a `.sha256` file; check it with
+`shasum -a 256 -c CG-Agent-MacOS-Avatar.zip.sha256`.
 Merges to `main` also produce an Actions → **bundle** artifact containing
 `CG-Agent-MacOS-Avatar.zip`, retained for 14 days. Scheduled builds publish a
-prerelease at noon America/New_York when commits have changed. Manual runs from
-`main` publish a full release, optionally marked Latest; other branches produce
+prerelease at noon America/New_York when commits have changed. Manual runs (Actions → **bundle** → *Run workflow*) from
+`main` publish a full release, optionally marked Latest and with your own release notes; other branches produce
 prereleases. Downloaded builds are also ad-hoc signed, not notarized.
 
 ## Choose a backend

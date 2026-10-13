@@ -27,6 +27,17 @@ codesign --verify --deep --strict dist/CG-Agent-MacOS-Avatar.app
 plutil -lint dist/CG-Agent-MacOS-Avatar.app/Contents/Info.plist
 ```
 
+## Releases
+
+The **bundle** workflow packages the `.app` with Rust 1.88 on `macos-latest`,
+smoke-checks it (arm64 only, bundle ID `com.cgfixit.cg-agent`, `codesign
+--verify`), zips it, and writes `CG-Agent-MacOS-Avatar.zip.sha256`. To cut a
+release by hand, run it from the Actions tab (*Run workflow*) on `main`: it
+publishes a full release with both files, marks it Latest unless you untick
+`mark_latest`, and appends the optional `notes` input to the release notes.
+Other branches publish prereleases. The smoke check and checksum run only on
+macOS, so they are first exercised by a hosted run.
+
 ## Local checks and hosted CI
 
 `./scripts/ci.sh` runs formatting, Clippy with warnings denied, and all test
