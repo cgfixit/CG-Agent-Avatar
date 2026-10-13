@@ -23,7 +23,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness status usable | Bubble says `Harness ready — type below, Return to send` |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
-| A reply used the web | Bubble appends a compact `[via web ×N]` note. For Harness, N counts Harness's own web tool calls. For Direct Ollama it is `×1`, the lookup you asked for. Avatar never fetches pages itself |
+| A reply used the web | Direct Ollama appends `[via web: searched "…"]` or `[via web: read host/path…]`, naming what was sent (clipped to 60 characters). Harness appends `[via web ×N]`, counting its own web tool calls. Avatar never fetches pages itself |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
 The Send button is unavailable while a message is queued or being answered;
@@ -58,17 +58,23 @@ with a smaller viewport when screen space requires it.
 
 ## Web lookups (Direct Ollama)
 
-A Direct Ollama message reaches the web only when it starts with one of these
-phrases. Case doesn't matter, and a leading "please", "hey", "ok", "can you", or
-"could you" is ignored.
+A Direct Ollama message reaches the web only when it is a command: it starts with
+one of these phrases and what follows reads like a request. Case doesn't matter,
+and a leading "please", "hey", "ok", "can you", or "could you" is ignored.
 
 | Start the message with | Lookup |
 |---|---|
 | `search the web for`, `search the internet for`, `search online for`, `search the web`, `search the internet`, `search online`, `web search for`, `web search`, `search for`, `look up`, `google` | One web search for the rest of the message (up to 5 results) |
-| `read`, `open`, `fetch`, `summarize`, `summarise`, `visit`, followed by an `http://` or `https://` link anywhere in the message | Reads that one page |
+| `read`, `open`, `fetch`, `summarize`, `summarise`, `visit`, followed by an `http://` or `https://` link as its object (up to four filler words such as "the article at" may come between) | Reads that one page |
 
-Anything else, including a message that starts with just `search` or `research`,
-stays a local chat. The lookup runs through the local Ollama service's
+Three checks keep ordinary sentences local. After a bare `search for`, `look up`,
+or `google` the request needs at least two words ("google rust 1.90 release
+date"); the phrases that name the web (`search the web for …`) need one. A
+following `is`, `was`, `to`, `at`, `and` and similar words mark a statement
+("Google is a company…", "look up to your parents"), which stays local. A link
+has to be the object of the read verb, so "open question: why does https://…
+fail" stays local. Anything else, including a message that starts with just
+`search` or `research`, stays a local chat. The lookup runs through the local Ollama service's
 experimental web routes, which need Ollama 0.18.1 or newer and `ollama signin`.
 Ollama sends the query or link to its cloud service under your account; see
 [README](../README.md#web-lookups-direct-ollama) for the privacy boundary.
@@ -100,7 +106,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | `ollama: web lookup unavailable (http 403)…` | Ollama's cloud features are turned off (`OLLAMA_NO_CLOUD` or its settings). Turn them on to allow lookups. |
 | `ollama: web lookup unavailable (http 429)…` or `(http 5xx)…` | Ollama's web service is rate limiting, or Ollama couldn't reach it. Check the connection and try again later. |
 | `ollama: can't read that link…` | Only public `http(s)` pages can be read. Refused: `localhost`, private or link-local IPs, `.local` names, single-word hosts, and links with embedded passwords. |
-| A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama). Plain questions stay local. |
+| A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama) and give it a full request ("search the web for rust" or "google rust 1.90 release date"). Plain questions and one-word bare requests stay local. |
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
 | Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |

@@ -68,6 +68,24 @@ pub fn with_web_tools_note(reply: &str, tool_count: usize) -> String {
     format!("{reply} [via web ×{tool_count}]")
 }
 
+/// Longest part of a lookup note that echoes what was sent, in characters.
+const LOOKUP_NOTE_CHARS: usize = 60;
+
+/// Note appended to a Direct Ollama reply that used the web, naming what left
+/// the machine (`what` is the search words, or the link without its scheme),
+/// whitespace-collapsed and clipped. Harness replies keep the count-only
+/// [`with_web_tools_note`], because Harness decides its own queries.
+pub fn with_lookup_note(reply: &str, what: &str) -> String {
+    let what = what.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown: String = what.chars().take(LOOKUP_NOTE_CHARS).collect();
+    let ellipsis = if what.chars().count() > LOOKUP_NOTE_CHARS {
+        "…"
+    } else {
+        ""
+    };
+    format!("{reply} [via web: {shown}{ellipsis}]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +140,15 @@ mod tests {
         let out = expanded_text(&"x".repeat(10_000));
         assert!(out.chars().count() <= MAX_EXPANDED_CHARS + 1);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn lookup_note_names_what_was_sent_and_clips_it() {
+        assert_eq!(
+            with_lookup_note("hi", "searched \"rust  release\n date\""),
+            "hi [via web: searched \"rust release date\"]"
+        );
+        let long = with_lookup_note("hi", &"x".repeat(100));
+        assert_eq!(long, format!("hi [via web: {}…]", "x".repeat(60)));
     }
 }

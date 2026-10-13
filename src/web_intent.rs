@@ -43,8 +43,44 @@ const SEARCH: &[&str] = &[
     "google",
 ];
 
-/// Verbs that read a link, when the message also contains an http(s) URL.
+/// Verbs that read a link, when the link is the object of the verb.
 const FETCH: &[&str] = &["read", "open", "fetch", "summarize", "summarise", "visit"];
+
+/// How many filler words may sit between a read verb and its link
+/// ("read the article at <link>").
+const MAX_LINK_FILLER: usize = 4;
+const LINK_FILLER: &[&str] = &[
+    "this",
+    "that",
+    "the",
+    "a",
+    "an",
+    "following",
+    "page",
+    "article",
+    "link",
+    "post",
+    "site",
+    "website",
+    "url",
+    "doc",
+    "document",
+    "here",
+    "it",
+    "at",
+    "from",
+];
+
+/// First word after a search verb that marks a statement, not a command:
+/// "Google is a company", "look up to your parents", "search for and
+/// destroy". A command's object starts with a noun, a determiner, or a
+/// question word, never one of these.
+const NOT_A_COMMAND: &[&str] = &[
+    "is", "are", "was", "were", "am", "be", "been", "being", "has", "have", "had", "do", "does",
+    "did", "isn't", "aren't", "wasn't", "weren't", "doesn't", "don't", "didn't", "can", "could",
+    "will", "would", "should", "shall", "may", "might", "must", "to", "of", "at", "on", "in",
+    "from", "with", "by", "and", "or", "but",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Intent {
@@ -62,17 +98,73 @@ pub enum Intent {
 pub fn parse(message: &str) -> Intent {
     let rest = strip_polite(message.trim());
     if let Some(after) = FETCH.iter().find_map(|verb| strip_verb(rest, verb)) {
-        if let Some(link) = first_link(after) {
+        if let Some(link) = link_object(after) {
             return public_link(link).map_or(Intent::RefusedLink, Intent::Fetch);
         }
     }
-    if let Some(after) = SEARCH.iter().find_map(|verb| strip_verb(rest, verb)) {
-        let query = clean_query(after);
-        if !query.is_empty() {
-            return Intent::Search(query);
+    match search_gate(rest) {
+        Gate::Run(query) => Intent::Search(query),
+        Gate::Ask | Gate::Skip => Intent::Chat,
+    }
+}
+
+/// How sure a message is a search command.
+enum Gate {
+    /// Unmistakable: run the search.
+    Run(String),
+    /// Command-shaped but ambiguous (a bare verb with a one-word object).
+    Ask,
+    /// Not a search request.
+    Skip,
+}
+
+fn search_gate(rest: &str) -> Gate {
+    let Some((verb, after)) = SEARCH
+        .iter()
+        .find_map(|verb| strip_verb(rest, verb).map(|after| (*verb, after)))
+    else {
+        return Gate::Skip;
+    };
+    let query = clean_query(after);
+    let mut words = query.split_whitespace();
+    let Some(first) = words.next() else {
+        return Gate::Skip;
+    };
+    if NOT_A_COMMAND.contains(&bare_word(first).as_str()) {
+        return Gate::Skip;
+    }
+    // "search the web for x" names the venue, so it is a command by itself.
+    // A bare "google"/"look up"/"search for" needs an object with substance.
+    let names_the_web = ["web", "internet", "online"]
+        .iter()
+        .any(|w| verb.contains(w));
+    if names_the_web || words.next().is_some() {
+        Gate::Run(query)
+    } else {
+        Gate::Ask
+    }
+}
+
+/// Lowercased, punctuation-trimmed, with curly apostrophes straightened.
+fn bare_word(word: &str) -> String {
+    word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}')
+        .replace('\u{2019}', "'")
+        .to_lowercase()
+}
+
+/// The link a read verb applies to: the first word after the verb and a few
+/// filler words. "open question: why does https://x fail" is chat.
+fn link_object(after: &str) -> Option<&str> {
+    for token in after.split_whitespace().take(MAX_LINK_FILLER + 1) {
+        let lower = token.to_ascii_lowercase();
+        if lower.find("http").is_some_and(|at| at <= 1) {
+            return first_link(token);
+        }
+        if !LINK_FILLER.contains(&bare_word(token).as_str()) {
+            return None;
         }
     }
-    Intent::Chat
+    None
 }
 
 /// ASCII-case-insensitive prefix strip. `prefix` must be ASCII; `str::get`
@@ -316,9 +408,82 @@ mod tests {
         assert_eq!(parse("read file:///etc/passwd"), Intent::Chat);
     }
 
+    /// Messages that merely contain a search verb are chat. Each of these was
+    /// sent to the cloud before the gate required a command-shaped message.
+    #[test]
+    fn statements_that_start_with_a_search_verb_stay_local() {
+        for msg in [
+            "Google is a company, what do you think?",
+            "google was founded in 1998",
+            "look up to your parents",
+            "look up at the sky tonight",
+            "search for and destroy missions are fun",
+            "google doesn't mean what it used to",
+            "Search the web is slow today",
+            "web search can be creepy",
+            // Ambiguous one-word objects after a bare verb stay local too.
+            "search for meaning",
+            "google rust",
+            "look up serendipity",
+        ] {
+            assert_eq!(parse(msg), Intent::Chat, "{msg}");
+        }
+    }
+
+    #[test]
+    fn commands_with_substance_still_search() {
+        for (msg, q) in [
+            ("google rust 1.90 release date", "rust 1.90 release date"),
+            ("look up the capital of France", "the capital of France"),
+            ("Google what is a monad", "what is a monad"),
+            (
+                "search for it's a wonderful life cast",
+                "it's a wonderful life cast",
+            ),
+            // The venue is named, so one word is enough.
+            ("search the web for serendipity", "serendipity"),
+            ("web search: rust", "rust"),
+            ("search online for it", "it"),
+        ] {
+            assert_eq!(parse(msg), search(q), "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_link_must_be_the_object_of_the_read_verb() {
+        for msg in [
+            "open question: why does https://example.com/x?k=1 fail",
+            "read my notes and then compare with https://example.com/a",
+            "visit grandma, she sent https://example.com/a",
+            "summarize what happened at https://example.com/a",
+        ] {
+            assert_eq!(parse(msg), Intent::Chat, "{msg}");
+        }
+        for (msg, url) in [
+            (
+                "read the article at https://example.com/a",
+                "https://example.com/a",
+            ),
+            (
+                "summarize this page: https://example.com/a",
+                "https://example.com/a",
+            ),
+            (
+                "can you open the following link <https://example.com/a>",
+                "https://example.com/a",
+            ),
+            (
+                "fetch https://example.com/a and https://example.org/b",
+                "https://example.com/a",
+            ),
+        ] {
+            assert_eq!(parse(msg), fetch(url), "{msg}");
+        }
+    }
+
     #[test]
     fn long_queries_are_clipped() {
-        let msg = format!("search for {}", "x".repeat(MAX_QUERY_CHARS + 50));
+        let msg = format!("search the web for {}", "x".repeat(MAX_QUERY_CHARS + 50));
         match parse(&msg) {
             Intent::Search(q) => assert_eq!(q.chars().count(), MAX_QUERY_CHARS),
             other => panic!("expected search, got {other:?}"),

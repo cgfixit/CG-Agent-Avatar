@@ -199,14 +199,21 @@ impl Ollama {
     /// local chat that never touches the web routes.
     pub fn chat(&self, message: &str) -> Result<String, OllamaError> {
         let message = validate::message(message)?;
-        let context = match web_intent::parse(message) {
+        let (context, sent) = match web_intent::parse(message) {
             Intent::Chat => return self.complete(message),
             Intent::RefusedLink => return Err(OllamaError::LinkRefused),
-            Intent::Search(query) => search_context(&query, &self.web_search(&query)?),
-            Intent::Fetch(url) => page_context(&url, &self.web_fetch(&url)?),
+            Intent::Search(query) => (
+                search_context(&query, &self.web_search(&query)?),
+                format!("searched \"{query}\""),
+            ),
+            Intent::Fetch(url) => (
+                page_context(&url, &self.web_fetch(&url)?),
+                // Everything the cloud fetch received, minus the scheme.
+                format!("read {}", &url[url::Position::BeforeHost..]),
+            ),
         };
         let reply = self.complete(&format!("{context}\n\n{message}"))?;
-        Ok(display::with_web_tools_note(&reply, 1))
+        Ok(display::with_lookup_note(&reply, &sent))
     }
 
     fn web_search(&self, query: &str) -> Result<Vec<WebResult>, OllamaError> {
@@ -557,8 +564,8 @@ mod tests {
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
-            o.chat("look up zzqx").unwrap(),
-            "nothing found [via web ×1]"
+            o.chat("search the web for zzqx").unwrap(),
+            "nothing found [via web: searched \"zzqx\"]"
         );
         chat.assert();
     }
@@ -592,7 +599,7 @@ mod tests {
                 .with_body(body)
                 .create();
             let o = Ollama::from_origin(origin_for(&server)).unwrap();
-            let msg = o.chat("look up ollama").unwrap_err().to_string();
+            let msg = o.chat("search the web for ollama").unwrap_err().to_string();
             assert!(
                 msg.contains(&format!("(http {status})")) && msg.contains(hint),
                 "{msg}"
@@ -791,7 +798,7 @@ mod tests {
         assert_eq!(
             o.chat("search the web for rust 1.90 release date?")
                 .unwrap(),
-            "September [via web ×1]"
+            "September [via web: searched \"rust 1.90 release date\"]"
         );
         search.assert();
         chat.assert();
@@ -825,7 +832,7 @@ mod tests {
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
             o.chat("summarize https://example.com/post#top").unwrap(),
-            "short post [via web ×1]"
+            "short post [via web: read example.com/post]"
         );
         fetch.assert();
         chat.assert();
@@ -860,7 +867,10 @@ mod tests {
             .with_header("location", "https://example.com/")
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
-        assert!(matches!(o.chat("google rust"), Err(OllamaError::Redirect)));
+        assert!(matches!(
+            o.chat("google rust news"),
+            Err(OllamaError::Redirect)
+        ));
     }
 
     #[test]
@@ -938,7 +948,7 @@ mod tests {
         assert!(matches!(o.chat("hi"), Err(OllamaError::ResponseTooLarge)));
         assert!(matches!(o.tags_ok(), Err(OllamaError::ResponseTooLarge)));
         assert!(matches!(
-            o.chat("look up x"),
+            o.chat("search the web for x"),
             Err(OllamaError::ResponseTooLarge)
         ));
         // An oversized *error* body is capped too, and the status still wins.
