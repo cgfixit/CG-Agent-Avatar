@@ -19,15 +19,16 @@ bounds.
 ## 1. Establish a clean baseline first
 
 ```sh
-./scripts/ci.sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked <module or test name>      # only the tests tied to the change
 ```
 
-This runs `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`,
-`cargo test --locked --all-targets`, and `cargo deny --locked check` (if installed),
-the same gate CI runs. If it's not green before you start, fix that first: a
-before/after comparison against a broken baseline is meaningless. `rust-toolchain.toml`
-pins Rust 1.88; if `cargo clippy` reports a different version, put rustup's binaries
-first on `PATH` so the pinned toolchain's Clippy is used (see `docs/BUILD.md`). On
+Clippy with `-D warnings` is CI's bar. If it's not green before you start, fix that
+first: a before/after comparison against a broken baseline is meaningless. Run
+`./scripts/ci.sh` (the full gate) only when the user asks for it (AGENTS.md "Local
+verification"). `rust-toolchain.toml` pins Rust 1.88; if `cargo clippy` reports a
+different version, put rustup's binaries first on `PATH` (see `docs/BUILD.md`). On
 Linux (Claude Code on the web) `app.rs` is compiled out, so the gate there covers the
 portable modules only. Say so when a change touches `app.rs`.
 
@@ -84,5 +85,5 @@ portable modules only. Say so when a change touches `app.rs`.
 ## 4. Report, then change
 
 List concrete findings (file:line, what's wasteful or blocking, why) before editing.
-After making changes, re-run `./scripts/ci.sh` and note whether the clippy warning
-count changed. A change that "optimizes" but turns CI red isn't done.
+After making changes, re-run the baseline commands from section 1 and note whether
+the clippy warning count changed. A change that "optimizes" but turns CI red isn't done.
