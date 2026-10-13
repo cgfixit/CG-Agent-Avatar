@@ -157,9 +157,16 @@ fn public_link(raw: &str) -> Option<Url> {
 fn public_domain(domain: &str) -> bool {
     let d = domain.trim_end_matches('.').to_ascii_lowercase();
     d.contains('.')
-        && ![".localhost", ".local", ".internal", ".lan", ".home.arpa"]
-            .iter()
-            .any(|suffix| d.ends_with(suffix))
+        && ![
+            ".localhost",
+            ".localdomain",
+            ".local",
+            ".internal",
+            ".lan",
+            ".home.arpa",
+        ]
+        .iter()
+        .any(|suffix| d.ends_with(suffix))
 }
 
 fn public_v4(ip: Ipv4Addr) -> bool {
@@ -182,8 +189,18 @@ fn public_v6(ip: Ipv6Addr) -> bool {
     if let Some(v4) = ip.to_ipv4_mapped() {
         return public_v4(v4);
     }
-    let first = ip.segments()[0];
-    !(ip.is_loopback()
+    let seg = ip.segments();
+    let first = seg[0];
+    // Forms that embed or tunnel an IPv4 address (v4-compatible, NAT64, 6to4,
+    // Teredo) or discard traffic (100::/64) are refused whole, so a private
+    // address cannot be smuggled in as `http://[::7f00:1]/`.
+    let tunnels_v4 = seg[..6] == [0; 6]
+        || (first == 0x0064 && seg[1] == 0xff9b && seg[2..6] == [0; 4])
+        || first == 0x2002
+        || (first == 0x2001 && seg[1] == 0)
+        || (first == 0x0100 && seg[1..4] == [0; 3]);
+    !(tunnels_v4
+        || ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_multicast()
         || (first & 0xfe00) == 0xfc00
@@ -323,5 +340,28 @@ mod tests {
             Intent::Search(q) => assert_eq!(q.chars().count(), MAX_QUERY_CHARS),
             other => panic!("expected search, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ipv6_forms_that_embed_a_private_ipv4_are_refused() {
+        for link in [
+            "http://[::7f00:1]/",
+            "http://[::127.0.0.1]/",
+            "http://[64:ff9b::7f00:1]/",
+            "http://[2002:7f00:1::]/",
+            "http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/",
+            "http://[100::1]/",
+            "http://localhost.localdomain/x",
+        ] {
+            assert_eq!(
+                parse(&format!("read {link}")),
+                Intent::RefusedLink,
+                "{link}"
+            );
+        }
+        assert!(matches!(
+            parse("read http://[2606:4700:4700::1111]/"),
+            Intent::Fetch(_)
+        ));
     }
 }

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CG Agent Avatar scenes</title>
+<!--
+  Source for the images in this folder. Every number below comes from
+  src/theme.rs (CLASSIC / FABLE_PROTOCOL) and the layout math in
+  src/app.rs (OverlayLayout), in points. The desktop, the editor window and all
+  text are synthetic. Render with scripts/render-screenshots.sh.
+  Scene is chosen by the URL hash: #hero #thinking #expanded #fable #menu #notice
+-->
+<style>
+  :root {
+    --font: Inter, "SF Pro Text", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --ink: rgb(20, 20, 26);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 960px; height: 600px; overflow: hidden; font-family: var(--font); }
+  body { position: relative; background: #1d2433; }
+
+  /* ---- synthetic desktop ---- */
+  .wall { position: absolute; inset: 0;
+    background:
+      radial-gradient(900px 500px at 78% 12%, #3f5f8f 0%, transparent 60%),
+      radial-gradient(800px 600px at 8% 105%, #5b3f7a 0%, transparent 55%),
+      linear-gradient(160deg, #1b2a45, #22304f 45%, #2b2748); }
+  .menubar { position: absolute; top: 0; left: 0; right: 0; height: 24px;
+    background: rgba(18, 22, 34, .62); backdrop-filter: blur(20px);
+    color: #eef1f7; font-size: 13px; display: flex; align-items: center; padding: 0 12px; gap: 18px; }
+  .menubar b { font-weight: 600; }
+  .menubar .spacer { flex: 1; }
+  .menubar .tray { display: flex; align-items: center; gap: 14px; }
+  .menubar .tray img { width: 18px; height: 18px; object-fit: contain; }
+  .menubar .tray .on { background: rgba(255, 255, 255, .22); border-radius: 5px; padding: 1px 4px; }
+  .editor { position: absolute; left: 330px; top: 385px; width: 590px; height: 200px;
+    background: rgba(246, 247, 250, .96); border-radius: 10px; overflow: hidden;
+    box-shadow: 0 22px 60px rgba(0, 0, 0, .45), 0 0 0 .5px rgba(0, 0, 0, .35); }
+  .editor .title { height: 38px; background: #e8eaf0; display: flex; align-items: center;
+    gap: 8px; padding: 0 14px; font-size: 12.5px; color: #4a5060; border-bottom: 1px solid #d5d8e0; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .editor .body { padding: 22px 28px; font-size: 13px; line-height: 1.7; color: #2c3140; }
+  .editor h4 { font-size: 15px; margin-bottom: 8px; color: #1c2030; }
+  .editor .bar { height: 8px; border-radius: 4px; background: #d9dce5; margin: 11px 0; }
+  .editor .tag { display: inline-block; font-size: 11px; background: #dfe7f7; color: #35508a;
+    padding: 1px 7px; border-radius: 9px; margin-right: 6px; }
+
+  /* ---- the avatar panel (points == CSS px) ---- */
+  .panel { position: absolute; left: 24px; top: 40px; }
+  .card { position: absolute; left: 0; right: 0; top: 0; border-radius: 0; }
+  .reply, .label, .btn, .field { position: absolute; }
+  .reply { left: 16px; right: 16px; white-space: pre-wrap; overflow: hidden; }
+  .label { left: 16px; height: 20px; line-height: 20px; }
+  .btn { display: flex; align-items: center; justify-content: center; font-size: 13px;
+    background: #ececec; color: #1d1d1f; border-radius: 6px;
+    box-shadow: 0 0 0 .5px rgba(0, 0, 0, .12), 0 1px 1px rgba(0, 0, 0, .08); }
+  .btn.off { color: rgba(0, 0, 0, .3); background: #f1f1f1; }
+  .field { background: #fff; border: 1px solid #d3d3d6; border-radius: 6px;
+    padding: 0 9px; display: flex; align-items: center; color: #1d1d1f; overflow: hidden;
+    white-space: nowrap; box-shadow: inset 0 1px 1px rgba(0, 0, 0, .04); }
+  .field.empty { color: #8e8e93; }
+  .creature { position: absolute; left: 0; object-fit: contain; }
+  .scroll { position: absolute; right: 22px; width: 6px; border-radius: 3px; background: rgba(0, 0, 0, .35); }
+
+  .classic .card { background: rgba(255, 255, 255, .94); }
+  .classic .reply, .classic .label { color: var(--ink); font-size: 14px; line-height: 20px; }
+  .classic .label { font-size: 12px; }
+
+  .fable .card { background: rgba(25, 25, 37, .92); }
+  .fable .reply, .fable .label { color: rgb(236, 224, 196); font-size: 15px; line-height: 22px; }
+  .fable .label { font-size: 13px; }
+  .fable .btn { background: #e9e9ec; }
+
+  /* ---- menu-bar dropdown ---- */
+  .menu { position: absolute; right: 92px; top: 28px; width: 296px; padding: 5px;
+    background: rgba(246, 246, 248, .9); backdrop-filter: blur(30px); border-radius: 9px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .45), 0 0 0 .5px rgba(0, 0, 0, .3);
+    font-size: 13.5px; color: #1d1d1f; display: none; }
+  .menu .it { height: 24px; line-height: 24px; padding: 0 10px 0 24px; border-radius: 5px; position: relative; }
+  .menu .it.hl { background: #3f7be0; color: #fff; }
+  .menu .it.chk::before { content: "\2713"; position: absolute; left: 8px; }
+  .menu hr { border: 0; border-top: 1px solid rgba(0, 0, 0, .12); margin: 5px 8px; }
+  body.menu-scene .menu { display: block; }
+</style>
+</head>
+<body>
+<div class="wall"></div>
+<div class="menubar">
+  <b>Files</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
+  <span class="spacer"></span>
+  <span class="tray"><span id="tray-icon" class=""><img src="../assets/creature.png" alt=""></span><span>Tue 9:41 AM</span></span>
+</div>
+
+<div class="editor">
+  <div class="title">
+    <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>
+    <span style="margin-left:10px">launch-notes.md — Meadowlark Q4 (sample)</span>
+  </div>
+  <div class="body">
+    <h4>Meadowlark v2.4 — release prep</h4>
+    <span class="tag">draft</span><span class="tag">sample data</span>
+    <div class="bar" style="width: 92%"></div>
+    <div class="bar" style="width: 78%"></div>
+    <div class="bar" style="width: 85%"></div>
+    <div class="bar" style="width: 60%"></div>
+    <div class="bar" style="width: 88%"></div>
+    <div class="bar" style="width: 71%"></div>
+    <div class="bar" style="width: 90%"></div>
+    <div class="bar" style="width: 54%"></div>
+  </div>
+</div>
+
+<div class="menu" id="menu">
+  <div class="it">Talk</div><hr>
+  <div class="it">Harness (127.0.0.1:8790)</div>
+  <div class="it chk">Direct Ollama (qwen3.8:27b-mlx)</div>
+  <div class="it">Harness Login…</div>
+  <div class="it">Harness Password Reset…</div><hr>
+  <div class="it hl">Quit CG-Agent-MacOS-Avatar</div>
+</div>
+
+<div class="panel" id="panel"></div>
+
+<script>
+  // --- synthetic content ---
+  const SCENES = {
+    hero: { theme: "classic", state: "reply",
+      reply: "Before tagging v2.4, run through this short list:\n1. Changelog covers every merged PR since v2.3.\n2. Migration notes mention the renamed export setting.\n3. Smoke-test the installer on a clean machine.\n4. Bump the version in both manifests, then tag.\nWant me to turn this into a checklist for the PR?" },
+    thinking: { theme: "classic", state: "thinking" },
+    notice: { theme: "classic", state: "notice",
+      reply: "That message is too long to send (limit: 32,768 characters). Trim it and press Return again; your draft is still in the field." },
+    expanded: { theme: "classic", state: "expanded",
+      reply: "Here is a tidy summary of the standup notes, grouped by owner:\n\nAda\n• Finished the importer rewrite; CSV edge cases now covered.\n• Blocked on staging credentials for the beta cohort.\n\nGrace\n• Landed the accessibility pass on the settings screen.\n• Starting the offline-sync spike on Thursday.\n\nLinus\n• Triaged 14 open bugs; 3 are release blockers.\n• Needs a second reviewer for the packaging change.\n\nOpen questions\n1. Do we freeze features on Friday or Monday?\n2. Who owns the changelog for this release?\n\nSuggested next step: assign the three blockers today so the Friday cut stays realistic." },
+    fable: { theme: "fable", state: "reply",
+      reply: "A quiet way to start the day: pick the one task that would make everything else easier, write it on a sticky note, and give it the first focused hour. Everything after that is a bonus.", },
+    menu: { theme: "classic", state: "none" }
+  };
+
+  const THEMES = {
+    classic: { w: 640, creatureH: 88, gap: 12, pad: 16, toolbarH: 32, bubbleH: 132, actionW: 72, seeMoreW: 84, seeMoreH: 28, inputH: 30, inputY: 12, lineH: 20, maxExp: 420 },
+    fable:   { w: 680, creatureH: 96, gap: 12, pad: 18, toolbarH: 34, bubbleH: 148, actionW: 76, seeMoreW: 92, seeMoreH: 30, inputH: 32, inputY: 14, lineH: 22, maxExp: 480 }
+  };
+
+  function el(tag, cls, css, html) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (css) Object.assign(e.style, css);
+    if (html !== undefined) e.textContent = html;
+    return e;
+  }
+  const px = n => n + "px";
+
+  function build(name) {
+    const sc = SCENES[name];
+    const t = THEMES[sc.theme];
+    const panel = document.getElementById("panel");
+    panel.className = "panel " + (sc.theme === "fable" ? "fable" : "classic");
+    document.body.classList.toggle("menu-scene", name === "menu");
+    if (name === "menu") document.getElementById("tray-icon").className = "on";
+
+    const cw = t.creatureH * 589 / 778;
+    const cardY = t.creatureH + t.gap;               // bottom-origin, as in OverlayLayout
+    const toolbarY = cardY + t.pad;
+    const replyY = toolbarY + t.toolbarH + t.gap;
+    const expanded = sc.state === "expanded";
+    let visibleH = t.bubbleH;
+    if (expanded) {
+      const lines = sc.reply.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / 72)), 0);
+      visibleH = Math.min(t.maxExp, Math.max(t.bubbleH, lines * t.lineH + 12));
+    }
+    const H = replyY + visibleH + t.pad;
+    panel.style.width = px(t.w);
+    panel.style.height = px(H);
+    const top = y => H - y;                           // bottom-origin -> CSS top
+
+    if (name === "menu") {
+      // Panel closed: only the creature strip is on screen.
+      panel.style.height = px(t.creatureH);
+      panel.appendChild(el("img", "creature", { top: "0", width: px(cw), height: px(t.creatureH) })).src = "../assets/creature.png";
+      return;
+    }
+
+    panel.appendChild(el("div", "card", { top: "0", height: px(top(cardY)) }));
+
+    const reply = el("div", "reply", { top: px(top(replyY + visibleH)), height: px(visibleH) });
+    let text = sc.reply || "";
+    let label = "Direct Ollama";
+    if (sc.state === "thinking") { text = "…thinking"; label = "Direct Ollama · Thinking…"; }
+    reply.textContent = text;
+    if (expanded) reply.style.paddingTop = "4px";
+    panel.appendChild(reply);
+    if (expanded) {
+      panel.appendChild(el("div", "scroll", { top: px(top(replyY + visibleH) + 8), height: px(visibleH * 0.62) }));
+    }
+
+    const lab = el("div", "label", { top: px(top(toolbarY + (t.toolbarH - t.lineH) / 2 + t.lineH)) }, label);
+    panel.appendChild(lab);
+
+    const closeX = t.w - t.pad - t.actionW;
+    const seeX = closeX - t.gap - t.seeMoreW;
+    if (sc.state !== "thinking") {
+      panel.appendChild(el("div", "btn", { left: px(seeX), top: px(top(toolbarY + t.seeMoreH)), width: px(t.seeMoreW), height: px(t.seeMoreH) }, expanded ? "See Less" : "See More"));
+    }
+    panel.appendChild(el("div", "btn", { left: px(closeX), top: px(top(toolbarY + t.inputH)), width: px(t.actionW), height: px(t.inputH) }, "Close"));
+
+    const img = el("img", "creature", { top: px(top(t.creatureH)), width: px(cw), height: px(t.creatureH) });
+    img.src = "../assets/creature.png";
+    if (sc.state === "thinking") { img.style.top = px(top(t.creatureH) - 6); }
+    panel.appendChild(img);
+
+    const inputX = cw + t.gap, sendX = t.w - t.actionW;
+    const asked = sc.state === "reply" || sc.state === "expanded";
+    const draft = sc.state === "notice" ? "Pasted: the entire export log from last quarter …" : "";
+    const field = el("div", "field" + (draft ? "" : " empty"),
+      { left: px(inputX), top: px(top(t.inputY + t.inputH)), width: px(sendX - t.gap - inputX), height: px(t.inputH), fontSize: px(sc.theme === "fable" ? 15 : 14) },
+      draft || "Ask anything…");
+    panel.appendChild(field);
+    panel.appendChild(el("div", "btn" + (sc.state === "thinking" ? " off" : ""),
+      { left: px(sendX), top: px(top(t.inputY + t.inputH)), width: px(t.actionW), height: px(t.inputH) }, "Send"));
+  }
+
+  build((location.hash || "#hero").slice(1));
+</script>
+</body>
+</html>
