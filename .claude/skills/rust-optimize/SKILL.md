@@ -19,23 +19,24 @@ bounds.
 ## 1. Establish a clean baseline first
 
 ```sh
-./scripts/ci.sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked <module or test name>      # only the tests tied to the change
 ```
 
-This runs `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`,
-`cargo test --locked --all-targets`, and `cargo deny --locked check` (if installed),
-the same gate CI runs. If it's not green before you start, fix that first: a
-before/after comparison against a broken baseline is meaningless. `rust-toolchain.toml`
-pins Rust 1.88; if `cargo clippy` reports a different version, put rustup's binaries
-first on `PATH` so the pinned toolchain's Clippy is used (see `docs/BUILD.md`). On
+Clippy with `-D warnings` is CI's bar. If it's not green before you start, fix that
+first: a before/after comparison against a broken baseline is meaningless. Run
+`./scripts/ci.sh` (the full gate) only when the user asks for it (AGENTS.md "Local
+verification"). `rust-toolchain.toml` pins Rust 1.88; if `cargo clippy` reports a
+different version, put rustup's binaries first on `PATH` (see `docs/BUILD.md`). On
 Linux (Claude Code on the web) `app.rs` is compiled out, so the gate there covers the
 portable modules only. Say so when a change touches `app.rs`.
 
 ## 2. What actually matters in this codebase, in priority order
 
 1. **Main-thread blocking.** `client.rs`, `ollama.rs`, and `discover.rs` use
-   *blocking* `reqwest` on purpose (see `Cargo.toml`: no async runtime, `blocking`
-   feature only). Any network call reachable from `app.rs` (macOS-only, AppKit) must
+   *blocking* `reqwest` on purpose (see `Cargo.toml`: the `blocking` feature, no async
+   runtime of its own). Any network call reachable from `app.rs` (macOS-only, AppKit) must
    run the way the existing chat/status calls do, off the thread that owns the
    `NSApplication` run loop, not inline in a menu action handler. A "faster" change
    that moves a call onto the main thread is a regression dressed as an optimization;
@@ -61,28 +62,24 @@ portable modules only. Say so when a change touches `app.rs`.
 5. **`cargo clippy -D warnings` findings.** This is the highest-leverage, lowest-risk
    category. CI already enforces it, so fixing a real clippy finding can't regress the
    gate. Prefer these over speculative rewrites.
-6. **Obvious algorithmic waste** (repeated parsing of the same JSON/HTML, O(n^2)
-   string building, redundant clones of data that's immediately dropped). This app's
-   traffic is one operator's chat turns, not a request firehose. Don't chase
-   micro-allocation wins that clippy doesn't already flag; they're not worth the risk
-   of introducing a bug in security-sensitive code (`origin.rs`, `csrf.rs`,
-   `validate.rs`).
+6. **Obvious algorithmic waste** (re-parsing the same JSON/HTML, O(n^2) string
+   building, clones that are immediately dropped). Traffic is one operator's chat
+   turns, not a firehose: don't chase micro-allocation wins clippy doesn't flag; they
+   aren't worth a bug in security-sensitive code (`origin.rs`, `csrf.rs`, `validate.rs`).
 
 ## 3. Explicitly out of scope for "optimize"
 
-- Introducing `async`/a runtime, threads, or `unsafe` to chase throughput. This
-  codebase is deliberately synchronous and safe; that tradeoff is an architecture
-  decision, not something to relitigate under a perf request. If it genuinely needs
-  revisiting, say so and ask. Don't just do it.
+- Introducing `async`/a runtime, threads, or `unsafe` to chase throughput. The
+  codebase is deliberately synchronous and safe; that's an architecture decision, not
+  something to relitigate under a perf request. If it needs revisiting, say so and ask.
 - Re-tuning the release profile (`Cargo.toml`: `strip = true`, `lto = "thin"`,
   `codegen-units = 1`) without a measured reason.
 - Loosening anything `SECURITY.md` documents as a control (redirect refusal, path
-  allowlist, cert pinning, response cap) in the name of speed. If a security control
-  is genuinely the bottleneck, that's a finding to report, not something to quietly
-  work around. See the `check-security-invariants` skill.
+  allowlist, cert pinning, response cap) for speed. A control that is genuinely the
+  bottleneck is a finding to report (see `check-security-invariants`), not a workaround.
 
 ## 4. Report, then change
 
 List concrete findings (file:line, what's wasteful or blocking, why) before editing.
-After making changes, re-run `./scripts/ci.sh` and note whether the clippy warning
-count changed. A change that "optimizes" but turns CI red isn't done.
+After making changes, re-run the baseline commands from section 1 and note whether
+the clippy warning count changed. A change that "optimizes" but turns CI red isn't done.

@@ -36,8 +36,9 @@ Read `src/ollama.rs` top to bottom and record:
 - the `OllamaError` variants and their `Display` strings; note any variant that
   nothing constructs.
 
-Then grep `src/app.rs` for `tags_ok`, `OllamaError::`, and `11434` to see how each
-error becomes user-facing text, and check that `discover.rs` excludes `OLLAMA_PORT`.
+Then grep `src/app.rs` for `tags_ok`, `OllamaError::`, and `last_reply` to see how each
+error becomes bubble text (`ollama asleep`, `pull <MODEL>`, or `ollama: <Display>`),
+and check that `discover.rs` excludes `OLLAMA_PORT`.
 
 ## 2. Consistency checks (each one is pass/fail with `file:line`)
 
@@ -67,10 +68,9 @@ follow in that setup:
 - personas, vocabularies, or examples it points to that aren't actually included
   in the prompt text.
 
-Every instruction like that wastes context. It can also make the model hallucinate
-file contents or apologize for missing files. Report them; don't rewrite the
-prompt here. The prompt's content belongs to the owner, and changing it is a
-product decision.
+Each such instruction wastes context and can make the model hallucinate file contents
+or apologize for missing files. Report them; don't rewrite the prompt here, since its
+content is the owner's product decision.
 
 ## 4. Live probe (optional; only on macOS with the service running)
 
@@ -80,22 +80,19 @@ Only if the platform above is `Darwin` and the user agrees:
 curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/tags
 ```
 
-The `-w` write-out prints the HTTP status after the body, because `curl -sS` exits 0 on a
-404 or 500 and an empty error body would otherwise look like success. Compare the listed
-`name` values with `MODEL`, character for character. For the
-`web` mode, this second read-only probe also helps:
+The `-w` write-out prints the HTTP status after the body, because `curl -sS` exits 0 on
+a 404 or 500. Compare the listed `name` values with `MODEL`, character for character.
+For `web` mode, this second read-only probe also helps:
 
 ```sh
 curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/status
 ```
 
-Newer Ollama builds answer `{"cloud":{"disabled":<bool>,"source":"…"}}` (the route is
-in Ollama's `server/routes.go`); a 404 only means a build without it. `disabled: true`
-explains a 403 on lookups. It says nothing about sign-in. Never probe any host other
-than literal `127.0.0.1:11434`, never call anything but `/api/tags` and `/api/status`
-(no `/api/pull`, `/api/generate`, or any write route), and never start or install
-Ollama. The app
-itself never does these things, and this diagnosis doesn't either.
+Newer Ollama builds answer `{"cloud":{"disabled":<bool>,…}}`; a 404 only means a build
+without the route. `disabled: true` explains a 403 on lookups and says nothing about
+sign-in. Never probe any host but literal `127.0.0.1:11434`, never call anything but
+`/api/tags` and `/api/status` (no `/api/pull`, `/api/generate`, or any write route),
+and never start or install Ollama: the app never does these things either.
 
 ## 5. Symptom map
 
@@ -140,10 +137,9 @@ through these in order and stop at the first failing step:
 
 Tell the user, don't fix: the routes are experimental and can change between Ollama
 releases; the query or link leaves the Mac through Ollama's cloud under their account;
-and Ollama's own macOS docs say it needs macOS 14 or newer, while Avatar targets 13+, so
-Direct Ollama has a higher floor than the app. Anything that needs new routes or
-behavior in Avatar goes through `add-avatar-feature`, because every new route needs an
-allowlist entry, a `SECURITY.md` row, and a contract test.
+and Ollama needs macOS 14+ while Avatar targets 13+ (README). New routes or behavior
+in Avatar go through `add-avatar-feature` (allowlist entry + `SECURITY.md` row +
+contract test).
 
 ## Report format
 

@@ -6,11 +6,10 @@ argument-hint: "[what to add, e.g. \"menu item that shows the model name\"]"
 
 # Add an avatar feature
 
-This crate is layered specifically so security-relevant code stays small and
-portable, and UI code stays dumb. New functionality almost always crosses several
-of these layers. Find where each piece actually belongs instead of dropping
-everything into `app.rs`. AGENTS.md states the rule: put new code in the lowest
-layer that can hold it.
+This crate is layered so security-relevant code stays small and portable, and UI
+code stays dumb. New functionality almost always crosses several layers; find where
+each piece belongs instead of dropping everything into `app.rs`. AGENTS.md's rule:
+put new code in the lowest layer that can hold it.
 
 ## 1. The layering (bottom to top)
 
@@ -26,14 +25,10 @@ layer that can hold it.
    `NSMenu`/`NSMenuItem`, drawing, event handling. This is where layer 3's state
    becomes pixels, and nothing else should live here.
 
-`app.rs` also holds some logic with no AppKit in it (the worker threads, `harness_probe`,
-`ollama_health`). Linux can't compile that file, so its tests only run on macOS CI.
-Don't add to that pile: new logic of that kind goes in a lower layer where Linux CI
-can test it.
-
-A feature request like "add a menu item that shows X" touches layer 4 for the
-`NSMenuItem` itself, layer 3 if X is new UI state, and layer 2 if X comes from a
-network call. Identify which before writing code.
+`app.rs` also holds some AppKit-free logic (the worker threads, `harness_probe`,
+`ollama_health`) that only macOS CI can test. Don't add to that pile. "Add a menu
+item that shows X" touches layer 4 for the `NSMenuItem`, layer 3 if X is new UI
+state, and layer 2 if X comes from a network call; identify which before coding.
 
 | If the feature... | It lives in | The same change must also touch |
 |---|---|---|
@@ -56,20 +51,17 @@ allowlist. So a new backend call is never just "add a function to `client.rs`":
 2. Add a row to `SECURITY.md`'s asset -> threat -> control table. It's the living
    threat model this repo reviews against, not background reading; a new route
    without a row there is an undocumented capability.
-3. Add or extend a contract test in `tests/source_contracts.rs`. For example
-   `forbidden_paths_are_documented` walks `paths::FORBIDDEN` and asserts each entry is
-   actually unreachable; the per-backend tests (`client_never_mentions_agent_routes`,
+3. Add or extend a contract test in `tests/source_contracts.rs`:
+   `forbidden_paths_are_documented` asserts every `paths::FORBIDDEN` entry is
+   unreachable, and the per-backend tests (`client_never_mentions_agent_routes`,
    `ollama_relay_is_loopback_openai_compat_only`,
-   `ollama_web_lookups_stay_on_the_loopback_daemon`) lock the shape of each backend's
-   requests with a literal source-string check. A new backend or route earns the same
-   treatment.
+   `ollama_web_lookups_stay_on_the_loopback_daemon`) lock each backend's request
+   shape with a literal source-string check. A new backend or route earns the same.
 
-Never call anything in `paths::FORBIDDEN`. If a feature seems to need one, stop and
-ask: that's a product and security decision, not an implementation detail.
-
-Adding a new *host or port* (a third backend, not a new path on an existing one)
-follows `discover.rs`'s pattern instead; see how it distinguishes the harness port
-from `OLLAMA_PORT` and never scans a range.
+Never call anything in `paths::FORBIDDEN`; if a feature seems to need one, stop and
+ask: that's a product and security decision. A new *host or port* (a third backend)
+follows `discover.rs`'s pattern: it distinguishes the harness port from `OLLAMA_PORT`
+and never scans a range.
 
 ## 3. If it touches session, login, or CSRF
 
@@ -85,9 +77,8 @@ removes a control; it's not a detail to guess at.
   state, no AppKit); see its existing `Mood` enum and `MoodInput` struct for the
   pattern.
 - A new visual identity or token goes in `theme.rs`, as a new `Theme` value or field,
-  not as inline constants in `app.rs`. That module exists precisely so a new look
-  doesn't require hunting `draw` calls for magic numbers. `CG_AGENT_THEME` selects
-  between shipped themes at runtime.
+  not as inline constants in `app.rs`; `CG_AGENT_THEME` selects between shipped
+  themes once at launch (`theme::active`).
 - Only the actual `NSMenuItem`/view wiring goes in `app.rs`, following the existing
   `NSMenuItem::initWithTitle_action_keyEquivalent` construction pattern already used
   there. Network calls run on the worker threads, never on the `NSApplication` run
@@ -102,12 +93,13 @@ untrusted text: it goes through `display.rs` before it reaches the screen.
 
 ## 6. Before calling it done
 
-1. Run `./scripts/ci.sh`. Then re-read `tests/source_contracts.rs` and, if you touched
-   `discover.rs` or bundle metadata, `tests/lsof_argv.rs` / `tests/plist_contract.rs`.
-   These are cheap `include_str!` source-grep assertions, and this repo leans on them
-   as the actual enforcement mechanism for its invariants, not as optional style
-   checks. If your feature adds a new invariant worth protecting the same way, add a
-   test in that style rather than relying on review to catch regressions later.
+1. Run the changed code with meaningful inputs, then `cargo fmt --all -- --check`,
+   `cargo clippy --locked --all-targets --all-features -- -D warnings`, and the tests
+   tied to the change (`cargo test --locked --test source_contracts`, plus
+   `lsof_argv` / `plist_contract` if you touched `discover.rs` or bundle metadata).
+   `./scripts/ci.sh` is for when the user asks for the full suite (AGENTS.md "Local
+   verification"). The contract tests are cheap `include_str!` source-grep assertions
+   and the repo's actual enforcement mechanism; a new invariant earns one in that style.
 2. Docs follow code (AGENTS.md hard rule 8): rewrite the owning doc in place, per the doc
    map in `AGENTS.md`. `/docs-sync --check` lists what drifted.
 3. If the change touches networking, auth, discovery, `Info.plist`, or workflows, run

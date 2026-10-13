@@ -9,14 +9,12 @@ disallowed-tools: Edit, Write, NotebookEdit
 
 # PR opportunity scan
 
-Goal: in about **3 minutes of work**, find the 3-4 changes that would most improve
-this repo. Each one must be small, verifiable, and mergeable on its own. The output
-is a plan. **Change nothing**: no edits, no commits, no branches, no pushes, and no
-`cargo build`/`test` that would take minutes. The only exception is when `target/`
-is already warm and a single `cargo clippy` finishes in seconds.
-
-If `$ARGUMENTS` names a focus area, spend about 2/3 of the budget there. Still run a
-quick pass over the rest so that a higher-severity issue elsewhere isn't missed.
+Goal: in about **3 minutes of work**, find the 3-4 small, verifiable, independently
+mergeable changes that would most improve this repo. The output is a plan. **Change
+nothing**: no edits, commits, branches, pushes, or minutes-long `cargo build`/`test`;
+the one exception is a seconds-long `cargo clippy` on an already warm `target/`.
+If `$ARGUMENTS` names a focus area, spend about 2/3 of the budget there, with a quick
+pass over the rest so a higher-severity issue elsewhere isn't missed.
 
 ## Live context
 
@@ -67,12 +65,11 @@ long, speculative one.
   `permissions:` broader than `contents: read` outside the release job.
 - Check that the tool versions in `docs/BUILD.md` match the workflow YAML (cargo-audit,
   cargo-deny, Rust 1.88).
-- Scheduled coverage: `grep -n "schedule:" .github/workflows/*.yml`. If `ci.yml` and
-  `audit.yml` only run on push and pull_request, a new advisory or a yanked crate
-  (`deny.toml` has `yanked = "deny"`) shows up as a red `cargo-deny` on the next
-  unrelated PR instead of on `main`. The sibling `cg-agent-harness` repo runs a daily
-  advisories-only workflow for this; a PR here must keep `contents: read` and
-  SHA-pinned actions (`tests/ci_workflows.rs`).
+- Scheduled coverage: `grep -n "schedule:" .github/workflows/*.yml`. Only `bundle.yml`
+  is scheduled, so a new advisory or a yanked crate (`deny.toml` has `yanked = "deny"`)
+  shows up as a red `cargo-deny` on the next unrelated PR instead of on `main`. A
+  scheduled audit must keep `contents: read`, a `concurrency` group, and SHA-pinned
+  actions (`tests/ci_workflows.rs`).
 
 **Dependencies**
 - Run `cargo tree -d --locked` to find duplicate major versions worth consolidating.
@@ -82,17 +79,17 @@ long, speculative one.
   an expiry.
 
 **Tests**
-- `check-security-invariants` has a section called "Invariants covered only by unit
-  tests, or by reading". Each gap listed there (no test greps for `tls_certs_only`
-  or `redirect::Policy::none()`; `home.rs` ignores group-writable files and ownership;
-  discovery accepts a plain-HTTP listener on a TLS home while fallback is allowed) is a
-  candidate for a small test or fix. Confirm it is still a gap before proposing it.
+- `check-security-invariants` lists "Invariants covered only by unit tests, or by
+  reading". Each gap there (no test greps for `tls_certs_only` or
+  `redirect::Policy::none()`; `home.rs` ignores group-writable files and ownership) is
+  a candidate for a small test or fix. Confirm it is still a gap before proposing it.
 - Look for public functions in `validate.rs`, `csrf.rs`, `origin.rs`, `display.rs` without
   a boundary-value test (exact limit, limit+1, empty, NUL).
 
 **Performance**
 - Blocking I/O reachable from AppKit callbacks in `app.rs` outside the worker-thread
-  pattern (`std::thread::spawn`). See the `rust-optimize` skill for the priorities.
+  pattern (`spawn_workers`: the `cg-agent-status` and `cg-agent-chat` threads). See
+  the `rust-optimize` skill for the priorities.
 - A `reqwest` client rebuilt per request, or per timer tick, where one could be reused.
 - A blocking call without a deadline on the `cg-agent-status` thread, which also
   derives the creature's mood (`discover::lsof_stdout` has none; see `rust-optimize`).
@@ -102,7 +99,7 @@ long, speculative one.
   `REGISTERED_PATHS` array **plus** the extras that function adds) with
   `paths::ALLOWED_*` and `paths::FORBIDDEN`. A literal route that is neither allowed
   nor listed is unreachable by default (the allowlist is exact-match), but a new
-  mutation route that `FORBIDDEN` doesn't name is what PR #38 in this repo had to catch up on.
+  mutation route that `FORBIDDEN` doesn't name is what PR #38 here had to catch up on.
   Also compare the `/api/status`, login, and chat response shapes with what
   `client.rs` and `discover::looks_like_harness` parse.
 
