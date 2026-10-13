@@ -9,11 +9,11 @@ disallowed-tools: Edit, Write, NotebookEdit
 
 # Ollama doctor
 
-Direct Ollama is the **default** backend. It is also the one users misconfigure
-most often, because the app deliberately gives them no settings for it. This skill
-explains what the code actually does, checks it against the docs, and, when
-possible, compares it with the live local service. It reports only; fixes go
-through a normal PR (`add-avatar-feature` / `check-security-invariants`).
+Direct Ollama is the **default** backend, and the one users misconfigure most
+often because the app gives them no settings for it. This skill explains what the
+code does, checks it against the docs, and, when possible, compares it with the live
+local service. It reports only; fixes go through a normal PR
+(`add-avatar-feature` / `check-security-invariants`).
 
 `$ARGUMENTS` is a user-reported symptom, `web` (section 6), or `audit` (the default).
 
@@ -57,20 +57,16 @@ cargo test --locked ollama
 
 ## 3. System prompt fitness
 
-`resources/direct-ollama-system.md` is compiled in with `include_str!` and sent as
-the only `system` message to a model that has **no tools and no history**. The only
-outside text it ever sees is a `<web_results>`/`<web_page>` block the app adds for
-an explicit lookup. Read the prompt and flag every instruction the model cannot
-follow in that setup:
-- reading or browsing files (`SOUL.md`, `STYLE.md`, `examples/`, `data/`);
-- writing or appending anything (such as a `MEMORY.md` log);
-- personas, vocabularies, or examples it points to that aren't actually included
-  in the prompt text.
-
-Every instruction like that wastes context. It can also make the model hallucinate
-file contents or apologize for missing files. Report them; don't rewrite the
-prompt here. The prompt's content belongs to the owner, and changing it is a
-product decision.
+`resources/direct-ollama-system.md` is compiled in as `ollama::SYSTEM_PROMPT` and
+sent as the only `system` message to a model that has **no tools and no history**.
+The only outside text it ever sees is a `<web_results>`/`<web_page>` block the app
+adds for an explicit lookup. `ollama.rs::system_prompt_asks_for_nothing_a_tool_free_model_cannot_do`
+greps the prompt for known file references (`SOUL.md`, `STYLE.md`, `MEMORY.md`,
+`examples/`, `data/`) and caps it at 4 KiB. Read the prompt for what the grep can't
+see: any other instruction to read, browse, or write files, or a persona, vocabulary,
+or example it points to that isn't in the prompt text. Each one wastes context and
+can make the model hallucinate file contents. Report them; don't rewrite the prompt
+here. Its content belongs to the owner, and changing it is a product decision.
 
 ## 4. Live probe (optional; only on macOS with the service running)
 
@@ -80,27 +76,25 @@ Only if the platform above is `Darwin` and the user agrees:
 curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/tags
 ```
 
-The `-w` write-out prints the HTTP status after the body, because `curl -sS` exits 0 on a
-404 or 500 and an empty error body would otherwise look like success. Compare the listed
-`name` values with `MODEL`, character for character. For the
-`web` mode, this second read-only probe also helps:
+The `-w` write-out prints the HTTP status after the body, because `curl -sS` exits 0
+on a 404 or 500. Compare the listed `name` values with `MODEL`, character for
+character. For the `web` mode, this second read-only probe also helps:
 
 ```sh
 curl -sS --max-time 5 -w '\nHTTP %{response_code}\n' http://127.0.0.1:11434/api/status
 ```
 
-Newer Ollama builds answer `{"cloud":{"disabled":<bool>,"source":"…"}}` (the route is
-in Ollama's `server/routes.go`); a 404 only means a build without it. `disabled: true`
-explains a 403 on lookups. It says nothing about sign-in. Never probe any host other
-than literal `127.0.0.1:11434`, never call anything but `/api/tags` and `/api/status`
-(no `/api/pull`, `/api/generate`, or any write route), and never start or install
-Ollama. The app
-itself never does these things, and this diagnosis doesn't either.
+Newer Ollama builds answer `{"cloud":{"disabled":<bool>,"source":"…"}}`; a 404 only
+means a build without the route. `disabled: true` explains a 403 on lookups and says
+nothing about sign-in. Never probe any host other than literal `127.0.0.1:11434`,
+never call anything but `/api/tags` and `/api/status` (no `/api/pull`,
+`/api/generate`, or any write route), and never start or install Ollama. The app
+never does these things, and this diagnosis doesn't either.
 
 ## 5. Symptom map
 
-Bubble strings come from the chat worker in `app.rs` (grep `BACKEND_OLLAMA`). Check
-them again before quoting, because they change.
+Bubble strings are `OllamaError`'s `Display` text, prefixed `ollama: ` by the chat
+worker in `app.rs` (grep `BACKEND_OLLAMA`). Re-check them before quoting.
 
 | What the user sees | Most likely cause | Confirm by |
 |---|---|---|
@@ -108,7 +102,7 @@ them again before quoting, because they change.
 | `ollama: ollama http N: <reason>` | The daemon's own reason, clipped to one line. A 404 `…not found, try pulling it first` with the tag listed means missing model files (re-pull); 503 is a full queue; a 500 about the MLX runner is usually a failed load (memory) | Live probe tag list compared with `MODEL`; the Ollama app's log |
 | `ollama: ollama took too long to answer…` | The 720 s `CHAT_TIMEOUT` expired, typically a cold load plus a long answer | Retry after the model is loaded; `ollama ps` |
 | `pull <model>` | Chat got a 404 and `/api/tags` confirms the exact tag is absent (`OllamaError::ModelMissing`). An older Ollama may not offer the tag at all: its release notes first name `qwen3.8:27b-mlx` in v0.32.12 | Live probe tag list compared with `MODEL`; `ollama --version` |
-| `ollama: web lookup unavailable (http N): <hint>` | 404: Ollama without the web routes. 401: not signed in (`ollama signin`). 403: cloud features disabled. 429: upstream rate limit. 5xx: the daemon couldn't reach ollama.com | `ollama --version`; the Ollama app's sign-in and cloud settings |
+| `ollama: web lookup unavailable (http N): <hint>` | `web_hint` in `ollama.rs`: 404 no web routes, 401 not signed in, 403 cloud features off, 429 upstream rate limit, 5xx the daemon couldn't reach ollama.com | `ollama --version`; the Ollama app's sign-in and cloud settings |
 | `ollama: can't read that link…` | `web_intent` refused a private, `.local`, single-label, or credentialed link | Expected; only public http(s) pages |
 | Creature looks unwell but chat works | `tags_ok` returned `Ok(false)` (the status loop), or chat succeeded despite a tag the readiness rule rejects | Compare `tags_ok` matching with the live tag list |
 | `ollama: response too large` | Reply over 1 MiB (`MAX_BODY`) | Expected behavior; this is not a bug |
@@ -117,22 +111,21 @@ them again before quoting, because they change.
 ## 6. Web lookup setup (`$ARGUMENTS` = `web`)
 
 Lookups use the local daemon's experimental `/api/experimental/web_search` and
-`/web_fetch` routes. The daemon forwards them to ollama.com and signs the request with
-the machine's own `ollama signin` identity. Avatar sends no key, and the daemon strips
-any `Authorization` header anyway, so a key in Avatar would do nothing. Walk the user
-through these in order and stop at the first failing step:
+`/web_fetch` routes. The daemon forwards them to ollama.com under the machine's own
+`ollama signin` identity; Avatar sends no key. Walk the user through these in order
+and stop at the first failing step:
 
-1. **Ollama is new enough.** The web routes need 0.18.1 or newer (README,
-   `docs/CONTROLS.md`), but the fixed chat model `qwen3.8:27b-mlx` first appears in
-   Ollama v0.32.12, so use that as the bar: on an older build lookups can work while
-   chat still can't. A 404 from a lookup means the build predates the routes.
+1. **Ollama is new enough.** The web routes need 0.18.1 or newer (`docs/CONTROLS.md`),
+   but the fixed chat model `qwen3.8:27b-mlx` needs v0.32.12 (`docs/BUILD.md`), so use
+   that as the bar: on an older build lookups can work while chat can't. A 404 from a
+   lookup means the build predates the routes.
 2. **Signed in.** `ollama signin` links this Mac to an ollama.com account (the free
-   tier is enough). A 401 from a lookup means it isn't linked.
+   tier is enough). A 401 means it isn't linked.
 3. **Cloud features on.** Not `OLLAMA_NO_CLOUD=1`; the Ollama app also has a cloud
    toggle. Restart Ollama after changing it. A 403 means they're off, and the
    `/api/status` probe in section 4 shows `cloud.disabled`.
-4. **The daemon can reach ollama.com over HTTPS.** A 5xx from a lookup means it could
-   not; a 429 is an upstream rate limit, so wait and retry.
+4. **The daemon can reach ollama.com over HTTPS.** A 5xx means it could not; a 429 is
+   an upstream rate limit, so wait and retry.
 5. **Try it in Avatar** with an explicit phrase ("search the web for …" or
    "read https://…"). A successful lookup ends the reply with `[via web ×1]`. Plain
    questions stay local by design, so "no lookup happened" usually means the message
@@ -140,10 +133,9 @@ through these in order and stop at the first failing step:
 
 Tell the user, don't fix: the routes are experimental and can change between Ollama
 releases; the query or link leaves the Mac through Ollama's cloud under their account;
-and Ollama's own macOS docs say it needs macOS 14 or newer, while Avatar targets 13+, so
-Direct Ollama has a higher floor than the app. Anything that needs new routes or
-behavior in Avatar goes through `add-avatar-feature`, because every new route needs an
-allowlist entry, a `SECURITY.md` row, and a contract test.
+and Ollama needs macOS 14 or newer (README) while Avatar targets 13+, so Direct Ollama
+has a higher floor than the app. Anything that needs new routes or behavior in Avatar
+goes through `add-avatar-feature` (allowlist entry, `SECURITY.md` row, contract test).
 
 ## Report format
 
