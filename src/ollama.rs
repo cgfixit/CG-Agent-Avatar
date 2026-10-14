@@ -985,7 +985,7 @@ mod tests {
                 .create();
             let chat = server.mock("POST", POST_CHAT).expect(0).create();
             let o = Ollama::from_origin(origin_for(&server)).unwrap();
-            let got = o.chat("look up ollama release notes");
+            let got = o.chat("please look up ollama release notes");
             // 502 is the upstream service answering, so the request already went
             // out and the error also names it (see the AfterLookup test below).
             let ok = match &got {
@@ -1010,7 +1010,7 @@ mod tests {
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(
-            o.chat("look up rust news"),
+            o.chat("please look up rust news"),
             Err(OllamaError::Redirect)
         ));
     }
