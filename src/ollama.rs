@@ -893,7 +893,7 @@ mod tests {
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(
-            o.chat("google rust news"),
+            o.chat("look up rust news"),
             Err(OllamaError::Redirect)
         ));
     }

@@ -46,30 +46,9 @@ const SEARCH: &[&str] = &[
 /// Verbs that read a link, when the link is the object of the verb.
 const FETCH: &[&str] = &["read", "open", "fetch", "summarize", "summarise", "visit"];
 
-/// How many filler words may sit between a read verb and its link
-/// ("read the article at <link>").
-const MAX_LINK_FILLER: usize = 4;
-const LINK_FILLER: &[&str] = &[
-    "this",
-    "that",
-    "the",
-    "a",
-    "an",
-    "following",
-    "page",
-    "article",
-    "link",
-    "post",
-    "site",
-    "website",
-    "url",
-    "doc",
-    "document",
-    "here",
-    "it",
-    "at",
-    "from",
-];
+/// How many words may sit between a read verb and its link
+/// ("summarize the contents of <link>").
+const MAX_LINK_WORDS: usize = 4;
 
 /// First word after a search verb that marks a statement, not a command:
 /// "Google is a company", "look up to your parents", "search for and
@@ -99,13 +78,17 @@ pub enum Intent {
 }
 
 pub fn parse(message: &str) -> Intent {
-    let rest = strip_polite(message.trim());
+    let trimmed = message.trim();
+    let rest = strip_polite(trimmed);
+    // "please google rust" is unmistakably an imperative; a bare "Google Maps
+    // is useful" is not.
+    let polite = rest.len() != trimmed.len();
     if let Some(after) = FETCH.iter().find_map(|verb| strip_verb(rest, verb)) {
         if let Some(link) = link_object(after) {
             return public_link(link).map_or(Intent::RefusedLink, Intent::Fetch);
         }
     }
-    match search_gate(rest) {
+    match search_gate(rest, polite) {
         Gate::Run(query) => Intent::Search(query),
         Gate::Ask(query) => Intent::Offer(query),
         Gate::Skip => Intent::Chat,
@@ -122,7 +105,7 @@ enum Gate {
     Skip,
 }
 
-fn search_gate(rest: &str) -> Gate {
+fn search_gate(rest: &str, polite: bool) -> Gate {
     let Some((verb, after)) = SEARCH
         .iter()
         .find_map(|verb| strip_verb(rest, verb).map(|after| (*verb, after)))
@@ -134,15 +117,26 @@ fn search_gate(rest: &str) -> Gate {
     let Some(first) = words.next() else {
         return Gate::Skip;
     };
-    if NOT_A_COMMAND.contains(&bare_word(first).as_str()) {
-        return Gate::Skip;
-    }
-    // "search the web for x" names the venue, so it is a command by itself.
-    // A bare "google"/"look up"/"search for" needs an object with substance.
     let names_the_web = ["web", "internet", "online"]
         .iter()
         .any(|w| verb.contains(w));
-    if names_the_web || words.next().is_some() {
+    let colon = rest
+        .get(verb.len()..)
+        .is_some_and(|tail| tail.starts_with(':'));
+    // Unambiguous commands: a named venue plus "for" ("search the web for is
+    // Rust memory safe?") or a colon ("web search: can X do Y?"). Whatever
+    // follows is the query, even if it starts like a statement.
+    let explicit = (names_the_web && verb.ends_with("for")) || colon;
+    if !explicit && NOT_A_COMMAND.contains(&bare_word(first).as_str()) {
+        return Gate::Skip;
+    }
+    if explicit || names_the_web {
+        Gate::Run(query)
+    } else if verb == "google" && !polite {
+        // Also a company name: "Google Chrome keeps crashing" must not leave
+        // the machine. Offer the explicit phrasing instead.
+        Gate::Ask(query)
+    } else if words.next().is_some() {
         Gate::Run(query)
     } else {
         Gate::Ask(query)
@@ -156,15 +150,24 @@ fn bare_word(word: &str) -> String {
         .to_lowercase()
 }
 
-/// The link a read verb applies to: the first word after the verb and a few
-/// filler words. "open question: why does https://x fail" is chat.
+/// The link a read verb applies to: the first link within a few plain words
+/// of the verb. A comma, period or other sentence break first, or a colon that
+/// does not introduce the link, means the link belongs to another clause:
+/// "open question: why does https://x fail" is chat.
 fn link_object(after: &str) -> Option<&str> {
-    for token in after.split_whitespace().take(MAX_LINK_FILLER + 1) {
-        let lower = token.to_ascii_lowercase();
-        if lower.find("http").is_some_and(|at| at <= 1) {
+    let tokens: Vec<&str> = after.split_whitespace().take(MAX_LINK_WORDS + 1).collect();
+    let is_link = |token: &str| {
+        token
+            .to_ascii_lowercase()
+            .find("http")
+            .is_some_and(|at| at <= 1)
+    };
+    for (i, token) in tokens.iter().enumerate() {
+        if is_link(token) {
             return first_link(token);
         }
-        if !LINK_FILLER.contains(&bare_word(token).as_str()) {
+        let introduces_link = tokens.get(i + 1).is_some_and(|next| is_link(next));
+        if token.contains([',', ';', '.', '!', '?']) || (token.contains(':') && !introduces_link) {
             return None;
         }
     }
@@ -453,6 +456,11 @@ mod tests {
             ("search for meaning", "meaning"),
             ("google rust", "rust"),
             ("Please look up serendipity?", "serendipity"),
+            // A bare "google" is also a company name, so even a longer message
+            // is only offered, never sent: these were leaked to the cloud.
+            ("Google Maps is useful", "Maps is useful"),
+            ("Google Chrome keeps crashing", "Chrome keeps crashing"),
+            ("google rust 1.90 release date", "rust 1.90 release date"),
         ] {
             assert_eq!(parse(msg), Intent::Offer(q.to_string()), "{msg}");
         }
@@ -464,13 +472,20 @@ mod tests {
     #[test]
     fn commands_with_substance_still_search() {
         for (msg, q) in [
-            ("google rust 1.90 release date", "rust 1.90 release date"),
+            ("look up rust 1.90 release date", "rust 1.90 release date"),
             ("look up the capital of France", "the capital of France"),
-            ("Google what is a monad", "what is a monad"),
+            ("search for what is a monad", "what is a monad"),
             (
                 "search for it's a wonderful life cast",
                 "it's a wonderful life cast",
             ),
+            // A polite prefix or a colon makes "google" unmistakably a verb.
+            (
+                "please google rust 1.90 release date",
+                "rust 1.90 release date",
+            ),
+            ("can you google what is a monad", "what is a monad"),
+            ("Google: rust", "rust"),
             // The venue is named, so one word is enough.
             ("search the web for serendipity", "serendipity"),
             ("web search: rust", "rust"),
@@ -480,19 +495,51 @@ mod tests {
         }
     }
 
+    /// An explicit command keeps its query even when the query starts like a
+    /// statement ("is", "can", "at"); only ambiguous bare verbs are filtered.
     #[test]
-    fn a_link_must_be_the_object_of_the_read_verb() {
+    fn explicit_searches_may_start_with_an_auxiliary() {
+        for (msg, q) in [
+            (
+                "search the web for is Rust memory safe?",
+                "is Rust memory safe",
+            ),
+            ("web search: can X do Y?", "can X do Y"),
+            (
+                "search online for at home COVID tests",
+                "at home COVID tests",
+            ),
+            ("google: is it down", "is it down"),
+        ] {
+            assert_eq!(parse(msg), search(q), "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_link_must_be_near_the_read_verb_in_the_same_clause() {
         for msg in [
             "open question: why does https://example.com/x?k=1 fail",
             "read my notes and then compare with https://example.com/a",
             "visit grandma, she sent https://example.com/a",
-            "summarize what happened at https://example.com/a",
+            "read the docs. then try https://example.com/a",
         ] {
             assert_eq!(parse(msg), Intent::Chat, "{msg}");
         }
         for (msg, url) in [
             (
                 "read the article at https://example.com/a",
+                "https://example.com/a",
+            ),
+            (
+                "read more at https://example.com/a",
+                "https://example.com/a",
+            ),
+            (
+                "summarize the contents of https://example.com/a",
+                "https://example.com/a",
+            ),
+            (
+                "summarize what happened at https://example.com/a",
                 "https://example.com/a",
             ),
             (
