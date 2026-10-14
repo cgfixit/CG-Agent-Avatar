@@ -178,7 +178,8 @@ fn link_object(after: &str) -> Option<&str> {
             return first_link(token);
         }
         let introduces_link = tokens.get(i + 1).is_some_and(|next| is_link(next));
-        if token.contains([',', ';', '.', '!', '?']) || (token.contains(':') && !introduces_link) {
+        // Only a trailing mark ends the clause; "v1.2" is one word.
+        if token.ends_with([',', ';', '.', '!', '?']) || (token.contains(':') && !introduces_link) {
             return None;
         }
     }
@@ -475,6 +476,18 @@ mod tests {
     fn a_colon_may_follow_whitespace() {
         assert_eq!(parse("google : rust"), Intent::Search("rust".into()));
         assert_eq!(parse("look up : rust"), Intent::Search("rust".into()));
+    }
+
+    #[test]
+    fn a_period_inside_a_word_does_not_end_the_clause() {
+        assert!(matches!(
+            parse("read the v1.2 docs at https://example.com"),
+            Intent::Fetch(_)
+        ));
+        assert_eq!(
+            parse("read the docs. then https://example.com"),
+            Intent::Chat
+        );
     }
 
     #[test]

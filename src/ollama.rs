@@ -210,15 +210,19 @@ impl Ollama {
                 return Ok(display::with_search_offer(&self.complete(message)?, &query))
             }
             Intent::RefusedLink => return Err(OllamaError::LinkRefused),
-            Intent::Search(query) => (
-                search_context(&query, &self.web_search(&query)?),
-                format!("searched \"{query}\""),
-            ),
-            Intent::Fetch(url) => (
-                page_context(&url, &self.web_fetch(&url)?),
+            Intent::Search(query) => {
+                let sent = format!("searched \"{query}\"");
+                let results = self
+                    .web_search(&query)
+                    .map_err(|e| after_lookup(&sent, e))?;
+                (search_context(&query, &results), sent)
+            }
+            Intent::Fetch(url) => {
                 // Everything the cloud fetch received, minus the scheme.
-                format!("read {}", &url[url::Position::BeforeHost..]),
-            ),
+                let sent = format!("read {}", &url[url::Position::BeforeHost..]);
+                let page = self.web_fetch(&url).map_err(|e| after_lookup(&sent, e))?;
+                (page_context(&url, &page), sent)
+            }
         };
         let reply = self
             .complete(&format!("{context}\n\n{message}"))
@@ -300,6 +304,24 @@ impl Ollama {
             return Err(OllamaError::EmptyReply);
         }
         Ok(content.to_string())
+    }
+}
+
+/// Wraps a lookup failure that happened after the request left the machine
+/// (timeout, malformed or oversized 200 body), so the error still names what
+/// was sent. Failures before the daemon took the request are left as they are.
+fn after_lookup(sent: &str, e: OllamaError) -> OllamaError {
+    match e {
+        OllamaError::Unreachable
+        | OllamaError::Origin(_)
+        | OllamaError::Validate(_)
+        | OllamaError::Redirect
+        | OllamaError::WebUnavailable { .. }
+        | OllamaError::LinkRefused => e,
+        other => OllamaError::AfterLookup {
+            sent: sent.to_string(),
+            cause: other.to_string(),
+        },
     }
 }
 
@@ -634,6 +656,22 @@ mod tests {
             .create();
         let _chat = server
             .mock("POST", POST_CHAT)
+            .with_status(200)
+            .with_body("not json")
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        let msg = o.chat("search the web for ollama").unwrap_err().to_string();
+        assert!(
+            msg.contains("searched \"ollama\" was already sent"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_lookup_response_still_says_what_was_sent() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
             .with_status(200)
             .with_body("not json")
             .create();
@@ -1001,9 +1039,11 @@ mod tests {
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(o.chat("hi"), Err(OllamaError::ResponseTooLarge)));
         assert!(matches!(o.tags_ok(), Err(OllamaError::ResponseTooLarge)));
+        // Still refused at the cap; the error also names the lookup that went out.
         assert!(matches!(
             o.chat("search the web for x"),
-            Err(OllamaError::ResponseTooLarge)
+            Err(OllamaError::AfterLookup { ref cause, .. })
+                if *cause == OllamaError::ResponseTooLarge.to_string()
         ));
         // An oversized *error* body is capped too, and the status still wins.
         let mut server = mockito::Server::new();
