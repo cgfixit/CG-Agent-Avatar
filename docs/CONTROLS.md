@@ -72,11 +72,14 @@ Four checks keep ordinary sentences local:
 - **Statements.** After a bare verb, a following `is`, `was`, `to`, `at`, `and`
   and similar words mark a statement ("Google is a company…", "look up to your
   parents"), which stays local. A named-web phrase with `for`
-  (`search the web for is Rust memory safe?`) or a colon (`web search: can X do
-  Y?`) is a command whatever follows.
+  (`search the web for is Rust memory safe?`), a colon (`web search: can X do
+  Y?`), or a polite prefix (`please google is Rust memory safe?`) is a command
+  whatever follows. `look up` stays filtered even after "please", because "look
+  up to" and "look up at" are ordinary phrasal verbs.
 - **Substance.** After a bare `search for` or `look up` the request needs at
   least two words ("look up rust 1.90 release date"); the phrases that name the
-  web (`search the web for …`) need one.
+  web (`search the web for …`) and any polite request (`please google rust`)
+  need one.
 - **Plain `google`.** It is also a company name ("Google Chrome keeps crashing"),
   so `google …` searches only with `please`, `can you`, `ok` or a colon in front
   (`please google rust 1.90 release date`, `google: rust`).

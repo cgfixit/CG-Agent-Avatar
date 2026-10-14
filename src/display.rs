@@ -150,6 +150,11 @@ pub fn with_web_tools_note(reply: &str, tool_count: usize) -> String {
 /// so a very long reply must lose its own tail, never the footer. Counts raw
 /// characters, which is at least as many as survive sanitizing.
 fn append_footer(reply: &str, footer: &str) -> String {
+    // Sanitize the untrusted reply on its own first. Concatenating raw would
+    // let an unterminated escape at the end of the reply (`ESC ]`) swallow the
+    // trusted footer when the pair is sanitized for display. Sanitizing is
+    // idempotent, so the display pass leaves this text unchanged.
+    let reply = sanitized_text(reply, usize::MAX);
     let room = MAX_EXPANDED_CHARS.saturating_sub(footer.chars().count());
     if reply.chars().count() <= room {
         return format!("{reply}{footer}");
@@ -356,5 +361,33 @@ mod tests {
             with_web_tools_note(&exact, 1),
             format!("{exact} [via web ×1]")
         );
+    }
+
+    #[test]
+    fn an_unterminated_escape_in_the_reply_cannot_swallow_the_footer() {
+        for hostile in [
+            "answer\u{1b}]",
+            "answer\u{1b}[",
+            "answer\u{1b}",
+            "answer\u{1b}]0;t",
+        ] {
+            for (full, footer) in [
+                (
+                    with_lookup_note(hostile, "searched \"q\""),
+                    "answer [via web: searched \"q\"]",
+                ),
+                (with_web_tools_note(hostile, 1), "answer [via web ×1]"),
+                (
+                    with_search_offer(hostile, "rust"),
+                    "answer\n\nAnswered on this Mac only. To look it up online, say: search the web for rust",
+                ),
+            ] {
+                // Sanitizing drops the dangling escape and what it swallowed;
+                // the footer is intact either way.
+                let expected = footer;
+                assert_eq!(expanded_text(&full), expected, "{hostile:?}");
+                assert_eq!(bubble_text(&full), expected, "{hostile:?}");
+            }
+        }
     }
 }

@@ -127,12 +127,16 @@ fn search_gate(rest: &str, polite: bool) -> Gate {
     // Rust memory safe?") or a colon ("web search: can X do Y?"). Whatever
     // follows is the query, even if it starts like a statement.
     let explicit = (names_the_web && verb.ends_with("for")) || colon;
-    if !explicit && NOT_A_COMMAND.contains(&bare_word(first).as_str()) {
+    // A polite prefix ("please google …", "can you search for …") makes the
+    // verb an imperative too. "look up" stays filtered: "look up to" and "look
+    // up at" are ordinary phrasal verbs.
+    let imperative = explicit || (polite && verb != "look up");
+    if !imperative && NOT_A_COMMAND.contains(&bare_word(first).as_str()) {
         return Gate::Skip;
     }
-    if explicit || names_the_web {
+    if explicit || names_the_web || polite {
         Gate::Run(query)
-    } else if verb == "google" && !polite {
+    } else if verb == "google" {
         // Also a company name: "Google Chrome keeps crashing" must not leave
         // the machine. Offer the explicit phrasing instead.
         Gate::Ask(query)
@@ -156,11 +160,13 @@ fn bare_word(word: &str) -> String {
 /// "open question: why does https://x fail" is chat.
 fn link_object(after: &str) -> Option<&str> {
     let tokens: Vec<&str> = after.split_whitespace().take(MAX_LINK_WORDS + 1).collect();
+    // A real link, not just a word that starts with "http" ("HTTP docs").
     let is_link = |token: &str| {
-        token
-            .to_ascii_lowercase()
-            .find("http")
-            .is_some_and(|at| at <= 1)
+        first_link(token).is_some()
+            && token
+                .to_ascii_lowercase()
+                .find("http")
+                .is_some_and(|at| at <= 1)
     };
     for (i, token) in tokens.iter().enumerate() {
         if is_link(token) {
@@ -445,6 +451,9 @@ mod tests {
             "google doesn't mean what it used to",
             "Search the web is slow today",
             "web search can be creepy",
+            // "look up to/at" stay phrasal verbs even after "please".
+            "please look up to your parents",
+            "can you look up at the sky",
         ] {
             assert_eq!(parse(msg), Intent::Chat, "{msg}");
         }
@@ -455,7 +464,6 @@ mod tests {
         for (msg, q) in [
             ("search for meaning", "meaning"),
             ("google rust", "rust"),
-            ("Please look up serendipity?", "serendipity"),
             // A bare "google" is also a company name, so even a longer message
             // is only offered, never sent: these were leaked to the cloud.
             ("Google Maps is useful", "Maps is useful"),
@@ -479,7 +487,15 @@ mod tests {
                 "search for it's a wonderful life cast",
                 "it's a wonderful life cast",
             ),
-            // A polite prefix or a colon makes "google" unmistakably a verb.
+            // A polite prefix or a colon makes the verb unmistakably an imperative,
+            // so one word is enough and a statement-like start is still a query.
+            ("please google rust", "rust"),
+            ("Please look up serendipity?", "serendipity"),
+            ("please google is Rust memory safe?", "is Rust memory safe"),
+            (
+                "can you search for at home COVID tests",
+                "at home COVID tests",
+            ),
             (
                 "please google rust 1.90 release date",
                 "rust 1.90 release date",
@@ -528,6 +544,10 @@ mod tests {
         for (msg, url) in [
             (
                 "read the article at https://example.com/a",
+                "https://example.com/a",
+            ),
+            (
+                "read HTTP docs at https://example.com/a",
                 "https://example.com/a",
             ),
             (
