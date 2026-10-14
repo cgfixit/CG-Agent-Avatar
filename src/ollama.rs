@@ -78,6 +78,9 @@ pub enum OllamaError {
     EmptyReply,
     #[error("can't read that link: only public http(s) pages")]
     LinkRefused,
+    /// The lookup went out but the answer failed; say what left the Mac.
+    #[error("{cause} (Note: {sent} was already sent to Ollama's web service.)")]
+    AfterLookup { sent: String, cause: String },
 }
 
 #[derive(Serialize)]
@@ -217,7 +220,12 @@ impl Ollama {
                 format!("read {}", &url[url::Position::BeforeHost..]),
             ),
         };
-        let reply = self.complete(&format!("{context}\n\n{message}"))?;
+        let reply = self
+            .complete(&format!("{context}\n\n{message}"))
+            .map_err(|e| OllamaError::AfterLookup {
+                sent: sent.clone(),
+                cause: e.to_string(),
+            })?;
         Ok(display::with_lookup_note(&reply, &sent))
     }
 
@@ -614,6 +622,27 @@ mod tests {
                 "{msg}"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_answer_after_a_lookup_still_says_what_was_sent() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_status(200)
+            .with_body(r#"{"results":[]}"#)
+            .create();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(200)
+            .with_body("not json")
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        let msg = o.chat("search the web for ollama").unwrap_err().to_string();
+        assert!(
+            msg.contains("searched \"ollama\" was already sent"),
+            "{msg}"
+        );
     }
 
     #[test]

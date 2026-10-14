@@ -122,7 +122,7 @@ fn search_gate(rest: &str, polite: bool) -> Gate {
         .any(|w| verb.contains(w));
     let colon = rest
         .get(verb.len()..)
-        .is_some_and(|tail| tail.starts_with(':'));
+        .is_some_and(|tail| tail.trim_start().starts_with(':'));
     // Unambiguous commands: a named venue plus "for" ("search the web for is
     // Rust memory safe?") or a colon ("web search: can X do Y?"). Whatever
     // follows is the query, even if it starts like a statement.
@@ -134,11 +134,12 @@ fn search_gate(rest: &str, polite: bool) -> Gate {
     if !imperative && NOT_A_COMMAND.contains(&bare_word(first).as_str()) {
         return Gate::Skip;
     }
-    if explicit || names_the_web || polite {
+    if explicit || polite {
         Gate::Run(query)
-    } else if verb == "google" {
-        // Also a company name: "Google Chrome keeps crashing" must not leave
-        // the machine. Offer the explicit phrasing instead.
+    } else if verb == "google" || names_the_web {
+        // "google" is also a company name ("Google Chrome keeps crashing"), and
+        // "web search" is also a noun ("Web search results expose bias"): neither
+        // may leave the machine on its own. Offer the explicit phrasing instead.
         Gate::Ask(query)
     } else if words.next().is_some() {
         Gate::Run(query)
@@ -161,12 +162,16 @@ fn bare_word(word: &str) -> String {
 fn link_object(after: &str) -> Option<&str> {
     let tokens: Vec<&str> = after.split_whitespace().take(MAX_LINK_WORDS + 1).collect();
     // A real link, not just a word that starts with "http" ("HTTP docs").
+    // The scheme must not be glued to a word: "(https://…)" and
+    // "[notes](https://…)" count, "xhttps://…" does not.
     let is_link = |token: &str| {
         first_link(token).is_some()
-            && token
-                .to_ascii_lowercase()
-                .find("http")
-                .is_some_and(|at| at <= 1)
+            && token.to_ascii_lowercase().find("http").is_some_and(|at| {
+                token[..at]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !c.is_alphanumeric())
+            })
     };
     for (i, token) in tokens.iter().enumerate() {
         if is_link(token) {
@@ -457,6 +462,30 @@ mod tests {
         ] {
             assert_eq!(parse(msg), Intent::Chat, "{msg}");
         }
+    }
+
+    #[test]
+    fn named_web_statements_are_offered_not_run() {
+        for msg in ["Web search results expose bias", "search the web rust"] {
+            assert!(matches!(parse(msg), Intent::Offer(_)), "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_colon_may_follow_whitespace() {
+        assert_eq!(parse("google : rust"), Intent::Search("rust".into()));
+        assert_eq!(parse("look up : rust"), Intent::Search("rust".into()));
+    }
+
+    #[test]
+    fn markdown_links_are_read() {
+        for msg in [
+            "read [the release notes](https://example.com/releases)",
+            "read (https://example.com/a)",
+        ] {
+            assert!(matches!(parse(msg), Intent::Fetch(_)), "{msg}");
+        }
+        assert_eq!(parse("read xhttps://example.com/a"), Intent::Chat);
     }
 
     #[test]

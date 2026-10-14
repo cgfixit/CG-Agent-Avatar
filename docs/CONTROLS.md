@@ -77,9 +77,10 @@ Four checks keep ordinary sentences local:
   whatever follows. `look up` stays filtered even after "please", because "look
   up to" and "look up at" are ordinary phrasal verbs.
 - **Substance.** After a bare `search for` or `look up` the request needs at
-  least two words ("look up rust 1.90 release date"); the phrases that name the
-  web (`search the web for …`) and any polite request (`please google rust`)
-  need one.
+  least two words ("look up rust 1.90 release date"); `search the web for …`,
+  a colon (`google : rust`) and any polite request (`please google rust`) need
+  one. A named-web phrase without `for`, a colon or `please` ("Web search
+  results expose bias") is a noun, so it is answered locally with the offer.
 - **Plain `google`.** It is also a company name ("Google Chrome keeps crashing"),
   so `google …` searches only with `please`, `can you`, `ok` or a colon in front
   (`please google rust 1.90 release date`, `google: rust`).
