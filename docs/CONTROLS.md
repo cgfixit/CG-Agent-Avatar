@@ -13,7 +13,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Click the creature | Same as Talk |
 | Type, Return or **Send** | Send. Reply appears in the bubble **above** the avatar; while a request is busy, the next draft stays in the field |
 | **Close** | Hide the chat and let the creature roam again; reopening preserves the draft, reply, and expansion state |
-| `search the web for …`, `look up …`, `google …` | Direct Ollama runs one web search first, then answers from the results. See [Web lookups](#web-lookups-direct-ollama) |
+| `search the web for …`, `please look up …`, `google: …` | Direct Ollama runs one web search first, then answers from the results. See [Web lookups](#web-lookups-direct-ollama) |
 | `read <link>`, `summarize <link>` | Direct Ollama reads that one public page first, then answers from it |
 | **See More** | Expand a reply into a scrollable pane; **See Less** collapses it |
 | Harness/Ollama down | Field still types. Bubble says `waiting for Harness on loopback…` / `ollama asleep` |
@@ -67,29 +67,29 @@ and a leading "please", "hey", "ok", "can you", or "could you" is ignored.
 | `search the web for`, `search the internet for`, `search online for`, `search the web`, `search the internet`, `search online`, `web search for`, `web search`, `search for`, `look up`, `google` | One web search for the rest of the message (up to 5 results) |
 | `read`, `open`, `fetch`, `summarize`, `summarise`, `visit`, followed by an `http://` or `https://` link within four plain words ("the article at", "the contents of") in the same clause | Reads that one page |
 
-Four checks keep ordinary sentences local:
+A search runs only on an unmistakable command. Three rules keep ordinary
+sentences local:
 
-- **Statements.** After a bare verb, a following `is`, `was`, `to`, `at`, `and`
-  and similar words mark a statement ("Google is a company…", "look up to your
-  parents"), which stays local. A named-web phrase with `for`
-  (`search the web for is Rust memory safe?`), a colon (`web search: can X do
-  Y?`), or a polite prefix (`please google is Rust memory safe?`) is a command
-  whatever follows. `look up` stays filtered even after "please", because "look
-  up to" and "look up at" are ordinary phrasal verbs.
-- **Substance.** After a bare `search for` or `look up` the request needs at
-  least two words ("look up rust 1.90 release date"); `search the web for …`,
-  a colon (`google : rust`) and any polite request (`please google rust`) need
-  one. A named-web phrase without `for`, a colon or `please` ("Web search
-  results expose bias") is a noun, so it is answered locally with the offer.
-- **Plain `google`.** It is also a company name ("Google Chrome keeps crashing"),
-  so `google …` searches only with `please`, `can you`, `ok` or a colon in front
-  (`please google rust 1.90 release date`, `google: rust`).
+- **Command evidence.** A search needs one of: a named venue plus `for`
+  (`search the web for …`, `search online for …`), a colon after the verb
+  (`google: rust`, `look up : rust`, `web search: can X do Y?`), or a polite
+  prefix (`please look up …`, `can you google …`, `ok google …`). Whatever
+  follows is then the query, even if it starts like a statement
+  (`please google is Rust memory safe?`). `look up` stays filtered after
+  "please" when it reads as a phrasal verb ("look up to", "look up at").
+- **Bare verbs only offer.** `google …`, `look up …`, `search for …`,
+  `search the web …` and `web search …` with no `for`, colon or `please` can be
+  a company, a phrasal verb, a noun, or the start of a statement ("Google Chrome
+  keeps crashing", "Search for meaning is a universal concern", "Web search
+  results expose bias"). They are answered locally with the offer line below.
+  A first word like `is`, `to`, `at` or `and` marks a plain statement, which
+  gets no offer.
 - **Links.** A link has to sit within four plain words of the read verb, in the
   same clause: "read more at https://…" fetches, "open question: why does
   https://… fail" does not.
 
-A request the checks stop short of ("google rust", "Google Maps is useful",
-"search for meaning") is answered locally, and the reply ends with
+A request the rules stop short of ("google rust", "look up rust 1.90 release
+date", "search for meaning") is answered locally, and the reply ends with
 `Answered on this Mac only. To look it up online, say: search the web for
 rust`; nothing is sent until you do. Anything else, including a message that
 starts with just `search` or `research`, stays a local chat. The lookup runs through the local Ollama service's
@@ -124,7 +124,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | `ollama: web lookup unavailable (http 403)…` | Ollama's cloud features are turned off (`OLLAMA_NO_CLOUD` or its settings). Turn them on to allow lookups. |
 | `ollama: web lookup unavailable (http 429)…` or `(http 5xx)…` | Ollama's web service is rate limiting, or Ollama couldn't reach it. Check the connection and try again later. |
 | `ollama: can't read that link…` | Only public `http(s)` pages can be read. Refused: `localhost`, private or link-local IPs, `.local` names, single-word hosts, and links with embedded passwords. |
-| A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama) and give it a full request ("search the web for rust" or "look up rust 1.90 release date"). Plain questions stay local, and a one-word bare request is answered locally with an offer to search; say it the way the offer reads. |
+| A search was answered without looking anything up | Start the message with a command from [Web lookups](#web-lookups-direct-ollama) ("search the web for rust", "please look up rust 1.90 release date", or "google: rust"). Plain questions stay local, and a bare request is answered locally with an offer to search; say it the way the offer reads. |
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
 | Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |

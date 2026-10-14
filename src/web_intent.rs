@@ -113,8 +113,7 @@ fn search_gate(rest: &str, polite: bool) -> Gate {
         return Gate::Skip;
     };
     let query = clean_query(after);
-    let mut words = query.split_whitespace();
-    let Some(first) = words.next() else {
+    let Some(first) = query.split_whitespace().next() else {
         return Gate::Skip;
     };
     let names_the_web = ["web", "internet", "online"]
@@ -136,14 +135,10 @@ fn search_gate(rest: &str, polite: bool) -> Gate {
     }
     if explicit || polite {
         Gate::Run(query)
-    } else if verb == "google" || names_the_web {
-        // "google" is also a company name ("Google Chrome keeps crashing"), and
-        // "web search" is also a noun ("Web search results expose bias"): neither
-        // may leave the machine on its own. Offer the explicit phrasing instead.
-        Gate::Ask(query)
-    } else if words.next().is_some() {
-        Gate::Run(query)
     } else {
+        // A bare verb is never enough to send text off the machine: "google" is
+        // a company, "web search" a noun, and "search for meaning is …" a
+        // statement. Answer locally and offer the explicit phrasing.
         Gate::Ask(query)
     }
 }
@@ -353,15 +348,15 @@ mod tests {
             ),
             ("web search: tokio vs smol", "tokio vs smol"),
             (
-                "search for the latest macOS version",
+                "please search for the latest macOS version",
                 "the latest macOS version",
             ),
             (
-                "look up the weather in Paris please",
+                "please look up the weather in Paris",
                 "the weather in Paris",
             ),
             ("Google: rust async book", "rust async book"),
-            ("LOOK UP café opening hours", "café opening hours"),
+            ("PLEASE LOOK UP café opening hours", "café opening hours"),
             ("search the web for 東京 weather", "東京 weather"),
         ] {
             assert_eq!(parse(msg), search(q), "{msg}");
@@ -527,6 +522,14 @@ mod tests {
             ("Google Maps is useful", "Maps is useful"),
             ("Google Chrome keeps crashing", "Chrome keeps crashing"),
             ("google rust 1.90 release date", "rust 1.90 release date"),
+            // A bare "look up" / "search for" never sends anything either: it
+            // can open a statement ("Search for meaning is a universal concern").
+            ("look up rust 1.90 release date", "rust 1.90 release date"),
+            ("search for what is a monad", "what is a monad"),
+            (
+                "Search for meaning is a universal human concern",
+                "meaning is a universal human concern",
+            ),
         ] {
             assert_eq!(parse(msg), Intent::Offer(q.to_string()), "{msg}");
         }
@@ -538,11 +541,17 @@ mod tests {
     #[test]
     fn commands_with_substance_still_search() {
         for (msg, q) in [
-            ("look up rust 1.90 release date", "rust 1.90 release date"),
-            ("look up the capital of France", "the capital of France"),
-            ("search for what is a monad", "what is a monad"),
             (
-                "search for it's a wonderful life cast",
+                "please look up rust 1.90 release date",
+                "rust 1.90 release date",
+            ),
+            (
+                "can you look up the capital of France",
+                "the capital of France",
+            ),
+            ("please search for what is a monad", "what is a monad"),
+            (
+                "search for: it's a wonderful life cast",
                 "it's a wonderful life cast",
             ),
             // A polite prefix or a colon makes the verb unmistakably an imperative,
