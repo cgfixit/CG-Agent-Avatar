@@ -226,9 +226,14 @@ impl Ollama {
         };
         let reply = self
             .complete(&format!("{context}\n\n{message}"))
-            .map_err(|e| OllamaError::AfterLookup {
-                sent: sent.clone(),
-                cause: e.to_string(),
+            .map_err(|e| match e {
+                // The app turns these into actionable text ("pull …",
+                // "ollama asleep"), which matters more than the note.
+                OllamaError::ModelMissing | OllamaError::Unreachable => e,
+                other => OllamaError::AfterLookup {
+                    sent: sent.clone(),
+                    cause: other.to_string(),
+                },
             })?;
         Ok(display::with_lookup_note(&reply, &sent))
     }
@@ -308,7 +313,7 @@ impl Ollama {
 }
 
 /// Wraps a lookup failure that happened after the request left the machine
-/// (timeout, malformed or oversized 200 body), so the error still names what
+/// (timeout, upstream 429/5xx, malformed or oversized 200 body), so the error still names what
 /// was sent. Failures before the daemon took the request are left as they are.
 fn after_lookup(sent: &str, e: OllamaError) -> OllamaError {
     match e {
@@ -316,8 +321,10 @@ fn after_lookup(sent: &str, e: OllamaError) -> OllamaError {
         | OllamaError::Origin(_)
         | OllamaError::Validate(_)
         | OllamaError::Redirect
-        | OllamaError::WebUnavailable { .. }
         | OllamaError::LinkRefused => e,
+        // 401/403/404 are the local daemon refusing; 429 and 5xx come back
+        // from the upstream service, so the request has already gone out.
+        OllamaError::WebUnavailable { status } if status != 429 && status < 500 => e,
         other => OllamaError::AfterLookup {
             sent: sent.to_string(),
             cause: other.to_string(),
@@ -684,6 +691,43 @@ mod tests {
     }
 
     #[test]
+    fn an_upstream_rate_limit_says_what_was_sent_but_a_local_refusal_does_not() {
+        for (status, wrapped) in [(429, true), (502, true), (401, false), (403, false)] {
+            let mut server = mockito::Server::new();
+            let _search = server
+                .mock("POST", POST_WEB_SEARCH)
+                .with_status(status)
+                .with_body("{}")
+                .create();
+            let o = Ollama::from_origin(origin_for(&server)).unwrap();
+            let msg = o.chat("search the web for ollama").unwrap_err().to_string();
+            assert_eq!(msg.contains("was already sent"), wrapped, "{status}: {msg}");
+            assert!(msg.contains(&format!("(http {status})")), "{msg}");
+        }
+    }
+
+    #[test]
+    fn model_missing_after_a_lookup_stays_actionable() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_status(200)
+            .with_body(r#"{"results":[]}"#)
+            .create();
+        let _chat = server.mock("POST", POST_CHAT).with_status(404).create();
+        let _tags = server
+            .mock("GET", GET_TAGS)
+            .with_status(200)
+            .with_body(r#"{"models":[]}"#)
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(
+            o.chat("search the web for ollama"),
+            Err(OllamaError::ModelMissing)
+        ));
+    }
+
+    #[test]
     fn system_prompt_asks_for_nothing_a_tool_free_model_cannot_do() {
         // The request carries no tools, files, or history (see chat_body), so
         // the prompt must not point the model at any of them.
@@ -942,10 +986,16 @@ mod tests {
             let chat = server.mock("POST", POST_CHAT).expect(0).create();
             let o = Ollama::from_origin(origin_for(&server)).unwrap();
             let got = o.chat("look up ollama release notes");
-            assert!(
-                matches!(got, Err(OllamaError::WebUnavailable { status: s }) if s == status as u16),
-                "{status}: {got:?}"
-            );
+            // 502 is the upstream service answering, so the request already went
+            // out and the error also names it (see the AfterLookup test below).
+            let ok = match &got {
+                Err(OllamaError::WebUnavailable { status: s }) => *s == status as u16,
+                Err(OllamaError::AfterLookup { cause, .. }) => {
+                    status == 502 && cause.contains("(http 502)")
+                }
+                _ => false,
+            };
+            assert!(ok, "{status}: {got:?}");
             chat.assert();
         }
     }

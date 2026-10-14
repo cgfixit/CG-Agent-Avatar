@@ -177,7 +177,11 @@ fn link_object(after: &str) -> Option<&str> {
         if is_link(token) {
             return first_link(token);
         }
-        let introduces_link = tokens.get(i + 1).is_some_and(|next| is_link(next));
+        // A colon introduces the link when it comes next, or after a Markdown
+        // label that may span several words ("page: [release notes](https://…)").
+        let introduces_link = tokens.get(i + 1).is_some_and(|next| {
+            is_link(next) || (next.starts_with('[') && tokens[i + 1..].iter().any(|t| is_link(t)))
+        });
         // Only a trailing mark ends the clause; "v1.2" is one word.
         if token.ends_with([',', ';', '.', '!', '?']) || (token.contains(':') && !introduces_link) {
             return None;
@@ -486,6 +490,18 @@ mod tests {
         ));
         assert_eq!(
             parse("read the docs. then https://example.com"),
+            Intent::Chat
+        );
+    }
+
+    #[test]
+    fn a_colon_may_introduce_a_multiword_markdown_label() {
+        assert!(matches!(
+            parse("summarize this page: [release notes](https://example.com/releases)"),
+            Intent::Fetch(_)
+        ));
+        assert_eq!(
+            parse("open question: why does https://example.com fail"),
             Intent::Chat
         );
     }
