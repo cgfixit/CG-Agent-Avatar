@@ -14,9 +14,9 @@ or needs attention.
 - **Choose your companion's engine.** Start with Direct Ollama or connect to
   [CG-Agent-Harness](https://github.com/cgfixit/CG-Agent-Harness).
 
-![Classic theme showing a reply above the chat composer](docs/screenshots/classic-reply.jpg)
+![Avatar answering a release-prep question on a desktop, with the creature and chat field in front of a notes window](screenshots/hero.png)
 
-*Native macOS app. [Screenshot provenance](docs/screenshots/README.md).*
+*Illustration with synthetic sample data, rendered from the app's theme tokens (not a native capture). See [screenshots](screenshots/README.md); native captures are in [docs/screenshots](docs/screenshots/README.md).*
 
 ## Get started
 
@@ -68,6 +68,16 @@ with `ollama signin`, with cloud features enabled. **The query or link leaves
 your Mac through Ollama's cloud service.** Avatar connects only to loopback and
 holds no API key. Private hosts, link-local addresses, `.local` names, single-word
 hosts, and links with embedded credentials are refused.
+
+## Screenshots
+
+Illustrations with synthetic sample data, rendered from the app's theme tokens.
+
+| | |
+|---|---|
+| ![Thinking state](screenshots/thinking.png) **Thinking.** The panel names the backend, Send waits, and the draft field stays free. | ![Expanded reply](screenshots/expanded.png) **See More.** A long reply opens in a scrollable plain-text pane. |
+| ![Fable Protocol theme](screenshots/fable.png) **Fable Protocol theme** (`CG_AGENT_THEME=fable-protocol`). | ![Menu-bar menu](screenshots/menu.png) **Menu-bar menu.** Pick Direct Ollama or Harness; Harness login lives here. |
+| ![Oversized draft notice](screenshots/notice.png) **Oversized draft.** A clear notice instead of a silent no-op; the draft stays put. | |
 
 ## Talk, read, carry on
 
@@ -157,5 +167,6 @@ Claude Code imports the guide through [CLAUDE.md](CLAUDE.md); Codex reads it dir
 - [Build and verification](docs/BUILD.md)
 - [Controls, themes, and troubleshooting](docs/CONTROLS.md)
 - [Native screenshot provenance](docs/screenshots/README.md)
+- [Illustration screenshots](screenshots/README.md)
 
 MIT licensed. See [LICENSE](LICENSE).

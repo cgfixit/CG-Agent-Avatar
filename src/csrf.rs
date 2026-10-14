@@ -1,6 +1,8 @@
 //! CSRF token from the harness console HTML. Never log the value.
 
-pub const MAX_HTML_BYTES: usize = 512_000;
+/// Matches the HTTP layer's body cap, so a console page the client was willing
+/// to read is never rejected here for size.
+pub const MAX_HTML_BYTES: usize = crate::http::MAX_BODY as usize;
 pub const MIN_TOKEN: usize = 8;
 pub const MAX_TOKEN: usize = 128;
 
@@ -32,7 +34,14 @@ pub fn from_html(html: &str) -> Option<String> {
 fn attr(tag: &str, name: &str) -> Option<String> {
     let lower = tag.to_ascii_lowercase();
     let key = format!("{name}=");
-    let idx = lower.find(&key)?;
+    // The attribute name must start a token: `data-content=` and `username=`
+    // are not `content=` and `name=`.
+    let idx = lower.match_indices(&key).map(|(i, _)| i).find(|&i| {
+        lower[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|p| p.is_ascii_whitespace() || p == '"' || p == '\'')
+    })?;
     let after = tag[idx + key.len()..].trim_start();
     let quote = after.chars().next()?;
     if quote != '"' && quote != '\'' {
@@ -113,5 +122,20 @@ mod tests {
         assert!(accept_token("has.dot").is_none());
         assert!(accept_token("has/slash").is_none());
         assert!(accept_token("").is_none());
+    }
+
+    #[test]
+    fn lookalike_attributes_are_not_the_token() {
+        let html = r#"<meta name="csrf-token" data-content="aaaaaaaa" content="realtoken1">"#;
+        assert_eq!(from_html(html).as_deref(), Some("realtoken1"));
+        let html = r#"<meta username="x" name="csrf-token" content="realtoken2">"#;
+        assert_eq!(from_html(html).as_deref(), Some("realtoken2"));
+    }
+
+    #[test]
+    fn a_large_console_page_within_the_body_cap_still_yields_a_token() {
+        let pad = "x".repeat(600_000);
+        let html = format!(r#"<!--{pad}--><meta name="csrf-token" content="bigpage123">"#);
+        assert_eq!(from_html(&html).as_deref(), Some("bigpage123"));
     }
 }
