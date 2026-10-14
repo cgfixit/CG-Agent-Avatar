@@ -86,6 +86,20 @@ pub fn with_lookup_note(reply: &str, what: &str) -> String {
     format!("{reply} [via web: {shown}{ellipsis}]")
 }
 
+/// Footer for a local answer to a thin search request: nothing was sent
+/// online, and this is the exact phrasing that will search. `query` is clipped
+/// like a lookup note.
+pub fn with_search_offer(reply: &str, query: &str) -> String {
+    let query = query.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown: String = query.chars().take(LOOKUP_NOTE_CHARS).collect();
+    let ellipsis = if query.chars().count() > LOOKUP_NOTE_CHARS {
+        "…"
+    } else {
+        ""
+    };
+    format!("{reply}\n\nAnswered on this Mac only. To look it up online, say: search the web for {shown}{ellipsis}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +164,14 @@ mod tests {
         );
         let long = with_lookup_note("hi", &"x".repeat(100));
         assert_eq!(long, format!("hi [via web: {}…]", "x".repeat(60)));
+    }
+
+    #[test]
+    fn search_offer_gives_the_exact_phrase_and_clips_long_queries() {
+        assert_eq!(
+            with_search_offer("A rust is an oxide.", "rust"),
+            "A rust is an oxide.\n\nAnswered on this Mac only. To look it up online, say: search the web for rust"
+        );
+        assert!(with_search_offer("r", &"y".repeat(90)).ends_with(&format!("{}…", "y".repeat(60))));
     }
 }

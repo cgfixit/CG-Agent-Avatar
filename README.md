@@ -61,7 +61,9 @@ Avatar requests one search (up to five results) or one page through the local
 Ollama service, passes the response to the model as untrusted reference text,
 and marks the answer with what was sent, such as `[via web: searched "rust 1.90"]`.
 Other messages stay local: a statement that merely starts with "Google …" or
-"look up …", and a bare verb with a one-word object, never trigger a lookup. See [all supported phrases](docs/CONTROLS.md#web-lookups-direct-ollama).
+"look up …", and a bare verb with a one-word object, never trigger a lookup. For the latter
+Avatar answers locally and ends with `Answered on this Mac only. To look it up
+online, say: search the web for …`. See [all supported phrases](docs/CONTROLS.md#web-lookups-direct-ollama).
 
 Lookups require a daemon supporting Ollama's experimental web routes, signed in
 with `ollama signin`, with cloud features enabled. **The query or link leaves
