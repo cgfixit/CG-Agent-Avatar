@@ -23,7 +23,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness status usable | Bubble says `Harness ready — type below, Return to send` |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
-| A reply used the web | Bubble appends a compact `[via web ×N]` note. For Harness, N counts Harness's own web tool calls. For Direct Ollama it is `×1`, the lookup you asked for. Avatar never fetches pages itself |
+| A reply used the web | Direct Ollama appends `[via web: searched "…"]` or `[via web: read host/path…]`, naming what was sent (clipped to 60 characters). Harness appends `[via web ×N]`, counting its own web tool calls. Avatar never fetches pages itself |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
 The Send button is unavailable while a message is queued or being answered;
@@ -58,17 +58,41 @@ with a smaller viewport when screen space requires it.
 
 ## Web lookups (Direct Ollama)
 
-A Direct Ollama message reaches the web only when it starts with one of these
-phrases. Case doesn't matter, and a leading "please", "hey", "ok", "can you", or
-"could you" is ignored.
+A Direct Ollama message reaches the web only when it is a command: it starts with
+one of these phrases and what follows reads like a request. Case doesn't matter,
+and a leading "please", "hey", "ok", "can you", or "could you" is ignored.
 
 | Start the message with | Lookup |
 |---|---|
 | `search the web for`, `search the internet for`, `search online for`, `search the web`, `search the internet`, `search online`, `web search for`, `web search`, `search for`, `look up`, `google` | One web search for the rest of the message (up to 5 results) |
-| `read`, `open`, `fetch`, `summarize`, `summarise`, `visit`, followed by an `http://` or `https://` link anywhere in the message | Reads that one page |
+| `read`, `open`, `fetch`, `summarize`, `summarise`, `visit`, followed by an `http://` or `https://` link within four plain words ("the article at", "the contents of") in the same clause | Reads that one page |
 
-Anything else, including a message that starts with just `search` or `research`,
-stays a local chat. The lookup runs through the local Ollama service's
+Four checks keep ordinary sentences local:
+
+- **Statements.** After a bare verb, a following `is`, `was`, `to`, `at`, `and`
+  and similar words mark a statement ("Google is a company…", "look up to your
+  parents"), which stays local. A named-web phrase with `for`
+  (`search the web for is Rust memory safe?`), a colon (`web search: can X do
+  Y?`), or a polite prefix (`please google is Rust memory safe?`) is a command
+  whatever follows. `look up` stays filtered even after "please", because "look
+  up to" and "look up at" are ordinary phrasal verbs.
+- **Substance.** After a bare `search for` or `look up` the request needs at
+  least two words ("look up rust 1.90 release date"); `search the web for …`,
+  a colon (`google : rust`) and any polite request (`please google rust`) need
+  one. A named-web phrase without `for`, a colon or `please` ("Web search
+  results expose bias") is a noun, so it is answered locally with the offer.
+- **Plain `google`.** It is also a company name ("Google Chrome keeps crashing"),
+  so `google …` searches only with `please`, `can you`, `ok` or a colon in front
+  (`please google rust 1.90 release date`, `google: rust`).
+- **Links.** A link has to sit within four plain words of the read verb, in the
+  same clause: "read more at https://…" fetches, "open question: why does
+  https://… fail" does not.
+
+A request the checks stop short of ("google rust", "Google Maps is useful",
+"search for meaning") is answered locally, and the reply ends with
+`Answered on this Mac only. To look it up online, say: search the web for
+rust`; nothing is sent until you do. Anything else, including a message that
+starts with just `search` or `research`, stays a local chat. The lookup runs through the local Ollama service's
 experimental web routes, which need Ollama 0.18.1 or newer and `ollama signin`.
 Ollama sends the query or link to its cloud service under your account; see
 [README](../README.md#web-lookups-direct-ollama) for the privacy boundary.
@@ -100,7 +124,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | `ollama: web lookup unavailable (http 403)…` | Ollama's cloud features are turned off (`OLLAMA_NO_CLOUD` or its settings). Turn them on to allow lookups. |
 | `ollama: web lookup unavailable (http 429)…` or `(http 5xx)…` | Ollama's web service is rate limiting, or Ollama couldn't reach it. Check the connection and try again later. |
 | `ollama: can't read that link…` | Only public `http(s)` pages can be read. Refused: `localhost`, private or link-local IPs, `.local` names, single-word hosts, and links with embedded passwords. |
-| A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama). Plain questions stay local. |
+| A search was answered without looking anything up | Start the message with a lookup phrase from [Web lookups](#web-lookups-direct-ollama) and give it a full request ("search the web for rust" or "look up rust 1.90 release date"). Plain questions stay local, and a one-word bare request is answered locally with an offer to search; say it the way the offer reads. |
 | `harness asleep` | Confirm Harness is running and Avatar uses the same home. The desktop sidecar's port may differ from the menu label. |
 | Harness desktop app not found | Install/register the desktop app, or run a headless server for the selected home. |
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |
@@ -109,7 +133,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | Bubble ends in `…` | The preview shows the first six wrapped lines (at most 400 characters) and collapses runs of blank lines. **See More** shows the whole reply. |
 | `harness error: …` | Harness returned an error Avatar has no specific message for; the text after the colon is the harness's own, clipped and sanitized. |
 | `Harness is finishing another reply…` | A previous chat turn is still running; wait a moment and send again. |
-| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. |
+| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. A reply that would fill it is trimmed (ending in `…`) so the `[via web …]` note or the offer line is never the part that is cut. The 400-character preview can still hide the note; See More shows it. |
 
 For fresh native examples, see the [README screenshots](../README.md) and
 [capture provenance](screenshots/README.md). For build errors, see

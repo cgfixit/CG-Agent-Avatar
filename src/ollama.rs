@@ -78,6 +78,9 @@ pub enum OllamaError {
     EmptyReply,
     #[error("can't read that link: only public http(s) pages")]
     LinkRefused,
+    /// The lookup went out but the answer failed; say what left the Mac.
+    #[error("{cause} (Note: {sent} was already sent to Ollama's web service.)")]
+    AfterLookup { sent: String, cause: String },
 }
 
 #[derive(Serialize)]
@@ -199,14 +202,40 @@ impl Ollama {
     /// local chat that never touches the web routes.
     pub fn chat(&self, message: &str) -> Result<String, OllamaError> {
         let message = validate::message(message)?;
-        let context = match web_intent::parse(message) {
+        let (context, sent) = match web_intent::parse(message) {
             Intent::Chat => return self.complete(message),
+            // Too thin to send anywhere: answer here, then offer the phrase
+            // that would search. Nothing leaves the machine.
+            Intent::Offer(query) => {
+                return Ok(display::with_search_offer(&self.complete(message)?, &query))
+            }
             Intent::RefusedLink => return Err(OllamaError::LinkRefused),
-            Intent::Search(query) => search_context(&query, &self.web_search(&query)?),
-            Intent::Fetch(url) => page_context(&url, &self.web_fetch(&url)?),
+            Intent::Search(query) => {
+                let sent = format!("searched \"{query}\"");
+                let results = self
+                    .web_search(&query)
+                    .map_err(|e| after_lookup(&sent, e))?;
+                (search_context(&query, &results), sent)
+            }
+            Intent::Fetch(url) => {
+                // Everything the cloud fetch received, minus the scheme.
+                let sent = format!("read {}", &url[url::Position::BeforeHost..]);
+                let page = self.web_fetch(&url).map_err(|e| after_lookup(&sent, e))?;
+                (page_context(&url, &page), sent)
+            }
         };
-        let reply = self.complete(&format!("{context}\n\n{message}"))?;
-        Ok(display::with_web_tools_note(&reply, 1))
+        let reply = self
+            .complete(&format!("{context}\n\n{message}"))
+            .map_err(|e| match e {
+                // The app turns these into actionable text ("pull …",
+                // "ollama asleep"), which matters more than the note.
+                OllamaError::ModelMissing | OllamaError::Unreachable => e,
+                other => OllamaError::AfterLookup {
+                    sent: sent.clone(),
+                    cause: other.to_string(),
+                },
+            })?;
+        Ok(display::with_lookup_note(&reply, &sent))
     }
 
     fn web_search(&self, query: &str) -> Result<Vec<WebResult>, OllamaError> {
@@ -280,6 +309,26 @@ impl Ollama {
             return Err(OllamaError::EmptyReply);
         }
         Ok(content.to_string())
+    }
+}
+
+/// Wraps a lookup failure that happened after the request left the machine
+/// (timeout, upstream 429/5xx, malformed or oversized 200 body), so the error still names what
+/// was sent. Failures before the daemon took the request are left as they are.
+fn after_lookup(sent: &str, e: OllamaError) -> OllamaError {
+    match e {
+        OllamaError::Unreachable
+        | OllamaError::Origin(_)
+        | OllamaError::Validate(_)
+        | OllamaError::Redirect
+        | OllamaError::LinkRefused => e,
+        // 401/403/404 are the local daemon refusing; 429 and 5xx come back
+        // from the upstream service, so the request has already gone out.
+        OllamaError::WebUnavailable { status } if status != 429 && status < 500 => e,
+        other => OllamaError::AfterLookup {
+            sent: sent.to_string(),
+            cause: other.to_string(),
+        },
     }
 }
 
@@ -557,8 +606,8 @@ mod tests {
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
-            o.chat("look up zzqx").unwrap(),
-            "nothing found [via web ×1]"
+            o.chat("search the web for zzqx").unwrap(),
+            "nothing found [via web: searched \"zzqx\"]"
         );
         chat.assert();
     }
@@ -592,7 +641,7 @@ mod tests {
                 .with_body(body)
                 .create();
             let o = Ollama::from_origin(origin_for(&server)).unwrap();
-            let msg = o.chat("look up ollama").unwrap_err().to_string();
+            let msg = o.chat("search the web for ollama").unwrap_err().to_string();
             assert!(
                 msg.contains(&format!("(http {status})")) && msg.contains(hint),
                 "{msg}"
@@ -602,6 +651,80 @@ mod tests {
                 "{msg}"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_answer_after_a_lookup_still_says_what_was_sent() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_status(200)
+            .with_body(r#"{"results":[]}"#)
+            .create();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(200)
+            .with_body("not json")
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        let msg = o.chat("search the web for ollama").unwrap_err().to_string();
+        assert!(
+            msg.contains("searched \"ollama\" was already sent"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_lookup_response_still_says_what_was_sent() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_status(200)
+            .with_body("not json")
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        let msg = o.chat("search the web for ollama").unwrap_err().to_string();
+        assert!(
+            msg.contains("searched \"ollama\" was already sent"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn an_upstream_rate_limit_says_what_was_sent_but_a_local_refusal_does_not() {
+        for (status, wrapped) in [(429, true), (502, true), (401, false), (403, false)] {
+            let mut server = mockito::Server::new();
+            let _search = server
+                .mock("POST", POST_WEB_SEARCH)
+                .with_status(status)
+                .with_body("{}")
+                .create();
+            let o = Ollama::from_origin(origin_for(&server)).unwrap();
+            let msg = o.chat("search the web for ollama").unwrap_err().to_string();
+            assert_eq!(msg.contains("was already sent"), wrapped, "{status}: {msg}");
+            assert!(msg.contains(&format!("(http {status})")), "{msg}");
+        }
+    }
+
+    #[test]
+    fn model_missing_after_a_lookup_stays_actionable() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_status(200)
+            .with_body(r#"{"results":[]}"#)
+            .create();
+        let _chat = server.mock("POST", POST_CHAT).with_status(404).create();
+        let _tags = server
+            .mock("GET", GET_TAGS)
+            .with_status(200)
+            .with_body(r#"{"models":[]}"#)
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(
+            o.chat("search the web for ollama"),
+            Err(OllamaError::ModelMissing)
+        ));
     }
 
     #[test]
@@ -761,6 +884,26 @@ mod tests {
     }
 
     #[test]
+    fn a_thin_search_request_is_answered_locally_with_an_offer() {
+        let mut server = mockito::Server::new();
+        let search = server.mock("POST", POST_WEB_SEARCH).expect(0).create();
+        let fetch = server.mock("POST", POST_WEB_FETCH).expect(0).create();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(json_reply("An oxide."))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert_eq!(
+            o.chat("google rust").unwrap(),
+            "An oxide.\n\nAnswered on this Mac only. To look it up online, say: search the web for rust"
+        );
+        search.assert();
+        fetch.assert();
+    }
+
+    #[test]
     fn search_request_looks_up_then_answers_with_results() {
         let mut server = mockito::Server::new();
         let search = server
@@ -791,7 +934,7 @@ mod tests {
         assert_eq!(
             o.chat("search the web for rust 1.90 release date?")
                 .unwrap(),
-            "September [via web ×1]"
+            "September [via web: searched \"rust 1.90 release date\"]"
         );
         search.assert();
         chat.assert();
@@ -825,7 +968,7 @@ mod tests {
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
             o.chat("summarize https://example.com/post#top").unwrap(),
-            "short post [via web ×1]"
+            "short post [via web: read example.com/post]"
         );
         fetch.assert();
         chat.assert();
@@ -843,10 +986,16 @@ mod tests {
             let chat = server.mock("POST", POST_CHAT).expect(0).create();
             let o = Ollama::from_origin(origin_for(&server)).unwrap();
             let got = o.chat("look up ollama release notes");
-            assert!(
-                matches!(got, Err(OllamaError::WebUnavailable { status: s }) if s == status as u16),
-                "{status}: {got:?}"
-            );
+            // 502 is the upstream service answering, so the request already went
+            // out and the error also names it (see the AfterLookup test below).
+            let ok = match &got {
+                Err(OllamaError::WebUnavailable { status: s }) => *s == status as u16,
+                Err(OllamaError::AfterLookup { cause, .. }) => {
+                    status == 502 && cause.contains("(http 502)")
+                }
+                _ => false,
+            };
+            assert!(ok, "{status}: {got:?}");
             chat.assert();
         }
     }
@@ -860,7 +1009,10 @@ mod tests {
             .with_header("location", "https://example.com/")
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
-        assert!(matches!(o.chat("google rust"), Err(OllamaError::Redirect)));
+        assert!(matches!(
+            o.chat("look up rust news"),
+            Err(OllamaError::Redirect)
+        ));
     }
 
     #[test]
@@ -937,9 +1089,11 @@ mod tests {
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(o.chat("hi"), Err(OllamaError::ResponseTooLarge)));
         assert!(matches!(o.tags_ok(), Err(OllamaError::ResponseTooLarge)));
+        // Still refused at the cap; the error also names the lookup that went out.
         assert!(matches!(
-            o.chat("look up x"),
-            Err(OllamaError::ResponseTooLarge)
+            o.chat("search the web for x"),
+            Err(OllamaError::AfterLookup { ref cause, .. })
+                if *cause == OllamaError::ResponseTooLarge.to_string()
         ));
         // An oversized *error* body is capped too, and the status still wins.
         let mut server = mockito::Server::new();

@@ -142,7 +142,60 @@ pub fn with_web_tools_note(reply: &str, tool_count: usize) -> String {
     if tool_count == 0 {
         return reply.to_string();
     }
-    format!("{reply} [via web ×{tool_count}]")
+    append_footer(reply, &format!(" [via web ×{tool_count}]"))
+}
+
+/// `reply` followed by `footer`, trimming the reply (with `…`) so the pair
+/// still fits the expanded view. The footer discloses what left the machine,
+/// so a very long reply must lose its own tail, never the footer. Counts raw
+/// characters, which is at least as many as survive sanitizing.
+fn append_footer(reply: &str, footer: &str) -> String {
+    // Sanitize the untrusted reply on its own first. Concatenating raw would
+    // let an unterminated escape at the end of the reply (`ESC ]`) swallow the
+    // trusted footer when the pair is sanitized for display. Sanitizing is
+    // idempotent, so the display pass leaves this text unchanged.
+    let reply = sanitized_text(reply, usize::MAX);
+    let room = MAX_EXPANDED_CHARS.saturating_sub(footer.chars().count());
+    if reply.chars().count() <= room {
+        return format!("{reply}{footer}");
+    }
+    let kept: String = reply.chars().take(room.saturating_sub(1)).collect();
+    format!("{kept}…{footer}")
+}
+
+/// Longest part of a lookup note that echoes what was sent, in characters.
+const LOOKUP_NOTE_CHARS: usize = 60;
+
+/// Note appended to a Direct Ollama reply that used the web, naming what left
+/// the machine (`what` is the search words, or the link without its scheme),
+/// whitespace-collapsed and clipped. Harness replies keep the count-only
+/// [`with_web_tools_note`], because Harness decides its own queries.
+pub fn with_lookup_note(reply: &str, what: &str) -> String {
+    let what = what.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown: String = what.chars().take(LOOKUP_NOTE_CHARS).collect();
+    let ellipsis = if what.chars().count() > LOOKUP_NOTE_CHARS {
+        "…"
+    } else {
+        ""
+    };
+    append_footer(reply, &format!(" [via web: {shown}{ellipsis}]"))
+}
+
+/// Footer for a local answer to a thin search request: nothing was sent
+/// online, and this is the exact phrasing that will search. `query` is clipped
+/// like a lookup note.
+pub fn with_search_offer(reply: &str, query: &str) -> String {
+    let query = query.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown: String = query.chars().take(LOOKUP_NOTE_CHARS).collect();
+    let ellipsis = if query.chars().count() > LOOKUP_NOTE_CHARS {
+        "…"
+    } else {
+        ""
+    };
+    append_footer(
+        reply,
+        &format!("\n\nAnswered on this Mac only. To look it up online, say: search the web for {shown}{ellipsis}"),
+    )
 }
 
 #[cfg(test)]
@@ -202,6 +255,25 @@ mod tests {
     }
 
     #[test]
+    fn lookup_note_names_what_was_sent_and_clips_it() {
+        assert_eq!(
+            with_lookup_note("hi", "searched \"rust  release\n date\""),
+            "hi [via web: searched \"rust release date\"]"
+        );
+        let long = with_lookup_note("hi", &"x".repeat(100));
+        assert_eq!(long, format!("hi [via web: {}…]", "x".repeat(60)));
+    }
+
+    #[test]
+    fn search_offer_gives_the_exact_phrase_and_clips_long_queries() {
+        assert_eq!(
+            with_search_offer("A rust is an oxide.", "rust"),
+            "A rust is an oxide.\n\nAnswered on this Mac only. To look it up online, say: search the web for rust"
+        );
+        assert!(with_search_offer("r", &"y".repeat(90)).ends_with(&format!("{}…", "y".repeat(60))));
+    }
+
+    #[test]
     fn exact_length_text_gets_no_ellipsis() {
         let exact = "x".repeat(MAX_BUBBLE_CHARS);
         assert_eq!(bubble_text(&exact), exact);
@@ -253,5 +325,69 @@ mod tests {
         assert_eq!(bubble_text("a\u{1b}]0;title\u{7}b"), "ab");
         assert_eq!(bubble_text("a\u{1b}]8;;http://x\u{1b}\\link"), "alink");
         assert_eq!(bubble_text("end\u{1b}"), "end");
+    }
+
+    #[test]
+    fn footers_survive_a_reply_that_fills_the_expanded_view() {
+        let long = "x".repeat(9_000);
+        for (full, footer) in [
+            (
+                with_lookup_note(&long, "searched \"q\""),
+                "[via web: searched \"q\"]",
+            ),
+            (with_web_tools_note(&long, 2), "[via web ×2]"),
+            (with_search_offer(&long, "rust"), "search the web for rust"),
+        ] {
+            let shown = expanded_text(&full);
+            assert!(
+                shown.ends_with(footer),
+                "{footer}: {}",
+                &shown[shown.len() - 60..]
+            );
+            assert!(shown.chars().count() <= MAX_EXPANDED_CHARS);
+            assert!(
+                shown.contains("x…"),
+                "the reply, not the footer, is trimmed"
+            );
+        }
+        // A reply that fits is untouched.
+        assert_eq!(
+            with_lookup_note("short", "searched \"q\""),
+            "short [via web: searched \"q\"]"
+        );
+        // Exactly full leaves no room for a trim marker beyond the footer.
+        let exact = "y".repeat(MAX_EXPANDED_CHARS - " [via web ×1]".chars().count());
+        assert_eq!(
+            with_web_tools_note(&exact, 1),
+            format!("{exact} [via web ×1]")
+        );
+    }
+
+    #[test]
+    fn an_unterminated_escape_in_the_reply_cannot_swallow_the_footer() {
+        for hostile in [
+            "answer\u{1b}]",
+            "answer\u{1b}[",
+            "answer\u{1b}",
+            "answer\u{1b}]0;t",
+        ] {
+            for (full, footer) in [
+                (
+                    with_lookup_note(hostile, "searched \"q\""),
+                    "answer [via web: searched \"q\"]",
+                ),
+                (with_web_tools_note(hostile, 1), "answer [via web ×1]"),
+                (
+                    with_search_offer(hostile, "rust"),
+                    "answer\n\nAnswered on this Mac only. To look it up online, say: search the web for rust",
+                ),
+            ] {
+                // Sanitizing drops the dangling escape and what it swallowed;
+                // the footer is intact either way.
+                let expected = footer;
+                assert_eq!(expanded_text(&full), expected, "{hostile:?}");
+                assert_eq!(bubble_text(&full), expected, "{hostile:?}");
+            }
+        }
     }
 }

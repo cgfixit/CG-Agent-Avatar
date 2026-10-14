@@ -55,13 +55,17 @@ in the reply area when needed.
 
 Ask explicitly when you want information from the web:
 
-- "search the web for best pizza in Atlanta", "look up …", or "google …"
+- "search the web for best pizza in Atlanta", "look up rust 1.90 release date", or "please google …"
 - "read https://…", or "summarize https://…"
 
 Avatar requests one search (up to five results) or one page through the local
 Ollama service, passes the response to the model as untrusted reference text,
-and marks the answer `[via web ×1]`. Other messages stay local; bare `search …`
-does not trigger a lookup. See [all supported phrases](docs/CONTROLS.md#web-lookups-direct-ollama).
+and marks the answer with what was sent, such as `[via web: searched "rust 1.90"]`.
+Other messages stay local: a statement that merely starts with "Google …" or
+"look up …", a plain "google …" with no "please" or colon (it is also a company
+name), and a bare verb with a one-word object never trigger a lookup. For the
+last two Avatar answers locally and ends with `Answered on this Mac only. To look it up
+online, say: search the web for …`. See [all supported phrases](docs/CONTROLS.md#web-lookups-direct-ollama).
 
 Lookups require a daemon supporting Ollama's experimental web routes, signed in
 with `ollama signin`, with cloud features enabled. **The query or link leaves
