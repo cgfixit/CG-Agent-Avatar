@@ -39,6 +39,13 @@ fn dirs_home() -> std::path::PathBuf {
 
 const MAX_CERT_BYTES: u64 = 64 * 1024;
 
+/// Whether `tls/server.pem` exists at all (even if unreadable or malformed).
+/// A TLS home whose pin is momentarily unreadable must not look like a plain
+/// HTTP home.
+pub fn pinned_cert_present(home: &Path) -> bool {
+    std::fs::symlink_metadata(home.join("tls").join("server.pem")).is_ok()
+}
+
 /// Read the harness's own pinned leaf certificate (`tls/server.pem`) for
 /// HTTPS connections. Fresh homes generate and persist this file per
 /// cg-agent-harness's `docs/SECURE_RESEARCH.md`; there is no other source of
@@ -271,5 +278,15 @@ mod tests {
         assert!(!is_safe_home(Path::new("relative/home")));
         assert!(!is_safe_home(Path::new("/tmp/../etc")));
         assert!(is_safe_home(Path::new("/Users/example/.CGagentHarness")));
+    }
+
+    #[test]
+    fn an_unreadable_pin_still_counts_as_present() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!pinned_cert_present(dir.path()));
+        fs::create_dir(dir.path().join("tls")).unwrap();
+        fs::write(dir.path().join("tls").join("server.pem"), "").unwrap();
+        assert!(read_pinned_cert(dir.path()).is_none());
+        assert!(pinned_cert_present(dir.path()));
     }
 }

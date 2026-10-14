@@ -16,6 +16,19 @@ pub enum ValidateError {
     SessionIdInvalid,
 }
 
+/// What to tell the user when `message` refuses their draft. Only a too-long
+/// draft needs saying: an empty one is a plain no-op, and the draft itself is
+/// never echoed.
+pub fn rejection_notice(err: &ValidateError) -> Option<&'static str> {
+    match err {
+        ValidateError::MessageTooLong => Some(
+            "That message is too long to send (limit: 32,768 characters). \
+             Trim it and press Return again; your draft is still in the field.",
+        ),
+        _ => None,
+    }
+}
+
 pub fn message(raw: &str) -> Result<&str, ValidateError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -58,6 +71,18 @@ mod tests {
         assert_eq!(message(&too).unwrap_err(), ValidateError::MessageTooLong);
         assert!(message(&"a".repeat(MAX_MESSAGE_CHARS)).is_ok());
         assert_eq!(message("x\0y").unwrap_err(), ValidateError::EmptyMessage);
+    }
+
+    #[test]
+    fn only_an_oversized_draft_gets_a_notice() {
+        assert_eq!(
+            MAX_MESSAGE_CHARS, 32_768,
+            "notice text hard-codes the limit"
+        );
+        let notice = rejection_notice(&ValidateError::MessageTooLong).unwrap();
+        assert!(notice.contains("32,768"));
+        assert_eq!(rejection_notice(&ValidateError::EmptyMessage), None);
+        assert_eq!(rejection_notice(&ValidateError::SessionIdInvalid), None);
     }
 
     #[test]

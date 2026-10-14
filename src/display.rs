@@ -11,20 +11,51 @@ pub fn expanded_text(raw: &str) -> String {
     sanitized_text(raw, MAX_EXPANDED_CHARS)
 }
 
+#[derive(Clone, Copy)]
+enum Esc {
+    None,
+    Start,
+    Csi,
+    Osc,
+}
+
 fn sanitized_text(raw: &str, max_chars: usize) -> String {
     let mut out = String::new();
     let mut chars = 0usize;
-    let mut in_ansi = false;
+    let mut esc = Esc::None;
     for c in raw.chars() {
-        if c == '\u{1b}' {
-            in_ansi = true;
-            continue;
-        }
-        if in_ansi {
-            if c.is_ascii_alphabetic() {
-                in_ansi = false;
+        match esc {
+            Esc::None if c == '\u{1b}' => {
+                esc = Esc::Start;
+                continue;
             }
-            continue;
+            Esc::None => {}
+            Esc::Start => {
+                esc = match c {
+                    '[' => Esc::Csi,
+                    ']' => Esc::Osc,
+                    // Two-character escape: drop the introducer and this byte.
+                    _ => Esc::None,
+                };
+                continue;
+            }
+            // CSI ends at its final byte (0x40..=0x7E), not at "any letter",
+            // so text after a stray ESC is not swallowed.
+            Esc::Csi => {
+                if ('\u{40}'..='\u{7e}').contains(&c) {
+                    esc = Esc::None;
+                }
+                continue;
+            }
+            // OSC ends at BEL or ST (ESC \).
+            Esc::Osc => {
+                if c == '\u{7}' {
+                    esc = Esc::None;
+                } else if c == '\u{1b}' {
+                    esc = Esc::Start;
+                }
+                continue;
+            }
         }
         if c == '\0' {
             continue;
@@ -35,12 +66,58 @@ fn sanitized_text(raw: &str, max_chars: usize) -> String {
         if is_bidi_control(c) {
             continue;
         }
-        out.push(c);
-        chars += 1;
-        if chars >= max_chars {
+        // Ellipsis only when more text was dropped, so a reply of exactly
+        // `max_chars` is shown whole.
+        if chars == max_chars {
             out.push('…');
             break;
         }
+        out.push(c);
+        chars += 1;
+    }
+    out
+}
+
+/// Fits already-sanitized preview text into the fixed-height reply bubble.
+///
+/// `chars_per_line` is the theme's wrap estimate. Runs of blank lines collapse
+/// to one, and anything past `max_lines` wrapped rows ends in `…`, so a list or
+/// a many-paragraph reply is never clipped mid-line with no sign more exists
+/// behind **See More**.
+pub fn fit_lines(text: &str, chars_per_line: usize, max_lines: usize) -> String {
+    let per_row = chars_per_line.max(1);
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut blank_run = 0usize;
+    let mut first = true;
+    for line in text.split('\n') {
+        if line.trim().is_empty() {
+            blank_run += 1;
+            if blank_run > 1 {
+                continue;
+            }
+        } else {
+            blank_run = 0;
+        }
+        let rows = line.chars().count().max(1).div_ceil(per_row);
+        if used + rows > max_lines {
+            let room = max_lines.saturating_sub(used);
+            if room > 0 {
+                let kept: String = line.chars().take(room * per_row).collect();
+                if !first {
+                    out.push('\n');
+                }
+                out.push_str(kept.trim_end());
+            }
+            out.push('…');
+            return out;
+        }
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(line);
+        used += rows;
     }
     out
 }
@@ -173,5 +250,59 @@ mod tests {
             "A rust is an oxide.\n\nAnswered on this Mac only. To look it up online, say: search the web for rust"
         );
         assert!(with_search_offer("r", &"y".repeat(90)).ends_with(&format!("{}…", "y".repeat(60))));
+    }
+
+    #[test]
+    fn exact_length_text_gets_no_ellipsis() {
+        let exact = "x".repeat(MAX_BUBBLE_CHARS);
+        assert_eq!(bubble_text(&exact), exact);
+        let over = "x".repeat(MAX_BUBBLE_CHARS + 1);
+        assert_eq!(bubble_text(&over).chars().count(), MAX_BUBBLE_CHARS + 1);
+        assert!(bubble_text(&over).ends_with('…'));
+        // Dropped trailing controls are not "more text".
+        assert_eq!(bubble_text(&format!("{exact}\0\u{7}")), exact);
+    }
+
+    #[test]
+    fn fit_lines_keeps_text_that_fits_untouched() {
+        let hint = "A little company for your next idea.\nAsk a question below.";
+        assert_eq!(fit_lines(hint, 72, 6), hint);
+        assert_eq!(fit_lines("", 72, 6), "");
+        assert_eq!(fit_lines("\nlead", 72, 6), "\nlead");
+    }
+
+    #[test]
+    fn fit_lines_collapses_blank_runs_and_marks_overflow() {
+        assert_eq!(fit_lines("a\n\n\n\nb", 72, 6), "a\n\nb");
+        let list = (1..=10)
+            .map(|n| format!("{n}. step"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            fit_lines(&list, 72, 6),
+            "1. step\n2. step\n3. step\n4. step\n5. step\n6. step…"
+        );
+        // Exactly full is not overflow.
+        assert_eq!(fit_lines("a\nb", 72, 2), "a\nb");
+    }
+
+    #[test]
+    fn fit_lines_cuts_a_long_wrapped_line_to_the_remaining_rows() {
+        let text = format!("intro\n{}", "word ".repeat(100));
+        let out = fit_lines(&text, 10, 3);
+        // Two rows of ten characters remain after "intro".
+        assert_eq!(out, "intro\nword word word word…");
+    }
+
+    #[test]
+    fn a_stray_escape_does_not_swallow_the_reply() {
+        assert_eq!(
+            bubble_text("hi \u{1b}你好世界 this is the real answer"),
+            "hi 好世界 this is the real answer"
+        );
+        assert_eq!(bubble_text("a\u{1b}[1;31mb\u{1b}[0mc"), "abc");
+        assert_eq!(bubble_text("a\u{1b}]0;title\u{7}b"), "ab");
+        assert_eq!(bubble_text("a\u{1b}]8;;http://x\u{1b}\\link"), "alink");
+        assert_eq!(bubble_text("end\u{1b}"), "end");
     }
 }

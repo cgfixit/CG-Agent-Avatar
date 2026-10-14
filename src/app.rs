@@ -91,7 +91,7 @@ impl ReplyPresentation {
         Self {
             raw: String::new(),
             in_flight: false,
-            preview: preview_text("", false),
+            preview: fitted_preview("", false, metrics),
             heights: expanded_reply_heights(&full, metrics),
             full,
         }
@@ -104,7 +104,7 @@ impl ReplyPresentation {
         self.raw.clear();
         self.raw.push_str(reply);
         self.in_flight = in_flight;
-        self.preview = preview_text(reply, in_flight);
+        self.preview = fitted_preview(reply, in_flight, metrics);
         self.full = reply_text(reply, in_flight);
         self.heights = expanded_reply_heights(&self.full, metrics);
         true
@@ -940,8 +940,17 @@ impl Delegate {
             return;
         };
         let value = field.stringValue().to_string();
-        let Ok(trimmed) = validate::message(&value) else {
-            return;
+        let trimmed = match validate::message(&value) {
+            Ok(trimmed) => trimmed,
+            Err(err) => {
+                // A silent no-op reads as a frozen Send button; say why. The
+                // draft stays in the field.
+                if let Some(notice) = validate::rejection_notice(&err) {
+                    *self.ivars().shared.last_reply.lock().unwrap() = notice.into();
+                    self.open_talk();
+                }
+                return;
+            }
         };
         let backend = self.ivars().shared.backend.load(Ordering::SeqCst);
         let generation = if backend == BACKEND_HARNESS {
@@ -1268,6 +1277,13 @@ fn harness_probe_once(
     jar: &Arc<SessionJar>,
 ) -> HarnessProbe {
     let cert = home::read_pinned_cert(home_dir);
+    // A pin that exists but cannot be read right now (mid-rotation, bad
+    // permissions) is still a TLS home: never probe plain HTTP for it.
+    let http_fallback = if cert.is_none() && home::pinned_cert_present(home_dir) {
+        discover::HttpFallback::Forbidden
+    } else {
+        http_fallback
+    };
     if let Some(cached) = cache.as_ref().filter(|c| c.cert == cert) {
         match cached.client.status() {
             Ok(status) => return HarnessProbe::Confirmed(cached.endpoint, status),
@@ -1303,6 +1319,16 @@ fn harness_probe_once(
         client,
     });
     probe
+}
+
+/// The bubble preview, held to the rows its fixed-height frame can show.
+fn fitted_preview(reply: &str, in_flight: bool, metrics: &theme::Metrics) -> String {
+    let rows = (metrics.bubble_h / metrics.reply_line_h).floor() as usize;
+    display::fit_lines(
+        &preview_text(reply, in_flight),
+        metrics.reply_chars_per_line,
+        rows.max(1),
+    )
 }
 
 fn preview_text(reply: &str, in_flight: bool) -> String {
@@ -1624,7 +1650,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 }
                                 Err(ClientError::ChatBusy) => {
                                     *shared.last_reply.lock().unwrap() =
-                                        "busy — wait a beat".into();
+                                        "Harness is finishing another reply — try again in a moment".into();
                                 }
                                 Err(ClientError::LoginRequired) => {
                                     guide.auth_required(generation, false);
@@ -1646,7 +1672,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                     *shared.last_reply.lock().unwrap() = "harness asleep".into();
                                 }
                                 Err(e) => {
-                                    *shared.last_reply.lock().unwrap() = format!("nope: {e}");
+                                    *shared.last_reply.lock().unwrap() = format!("harness error: {e}");
                                 }
                             }
                         }

@@ -141,6 +141,25 @@ fn bundle_manual_main_release_is_full_and_latest() {
 }
 
 #[test]
+fn bundle_ships_a_checksum_smoke_checks_the_app_and_keeps_notes_out_of_the_script() {
+    let y = bundle_yml();
+    assert!(y.contains("shasum -a 256 CG-Agent-MacOS-Avatar.zip"));
+    assert!(
+        y.matches("CG-Agent-MacOS-Avatar.zip.sha256").count() >= 4,
+        "checksum is written, uploaded, downloaded, and attached to the release"
+    );
+    assert!(y.contains("codesign --verify"));
+    assert!(y.contains("lipo -archs"));
+    assert!(y.contains("com.cgfixit.cg-agent"));
+    let create = y.split("- name: Create GitHub Release").nth(1).unwrap();
+    assert!(create.contains("USER_NOTES: ${{ github.event.inputs.notes }}"));
+    assert!(create.contains("--notes-file release-notes.md"));
+    // Free-form dispatch input must reach the shell only through env.
+    assert!(!create.contains("${{ github.event.inputs.notes }}\n          run"));
+    assert_eq!(y.matches("inputs.notes").count(), 1);
+}
+
+#[test]
 fn builds_and_checks_reject_lockfile_drift() {
     for source in [
         include_str!("../.github/workflows/ci.yml"),

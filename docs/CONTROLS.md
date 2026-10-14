@@ -32,7 +32,7 @@ Direct Ollama sends only the current message plus the bundled system prompt,
 and the results of one lookup when you ask for one. It asks for a direct answer
 with no hidden reasoning pass (`reasoning_effort: "none"`) and Qwen's published
 non-thinking sampling, so replies arrive sooner. Harness uses a server-side session. The input accepts up to 32,768 characters
-after trimming, rejects NUL characters, and leaves invalid input unsent.
+after trimming, rejects NUL characters, and leaves invalid input unsent. A draft over the limit also shows a short notice in the bubble and stays in the field.
 This is a character limit, not a token-context setting.
 
 Harness Login and Password Reset do not select a chat backend. Select
@@ -115,6 +115,9 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | Login succeeds but a chat goes to Ollama | Select Harness explicitly; the login action does not change the backend. |
 | `harness asleep` on a home you switched to plain HTTP | A leftover `tls/server.pem` keeps the home on pinned HTTPS and Avatar never falls back to HTTP. Delete that file (and restart Avatar if you also saw a certificate mismatch). |
 | Certificate mismatch | Verify Harness's certificate and home. Status polls read the certificate fresh and recover after pinned HTTPS succeeds. After a rejection, missing certificates and plain HTTP cannot restore readiness; intentionally switching that home to legacy HTTP requires restarting Avatar. Avatar does not offer a certificate bypass or change Keychain trust. |
+| Bubble ends in `…` | The preview shows the first six wrapped lines (at most 400 characters) and collapses runs of blank lines. **See More** shows the whole reply. |
+| `harness error: …` | Harness returned an error Avatar has no specific message for; the text after the colon is the harness's own, clipped and sanitized. |
+| `Harness is finishing another reply…` | A previous chat turn is still running; wait a moment and send again. |
 | Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. |
 
 For fresh native examples, see the [README screenshots](../README.md) and
