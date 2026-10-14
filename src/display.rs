@@ -142,7 +142,20 @@ pub fn with_web_tools_note(reply: &str, tool_count: usize) -> String {
     if tool_count == 0 {
         return reply.to_string();
     }
-    format!("{reply} [via web ×{tool_count}]")
+    append_footer(reply, &format!(" [via web ×{tool_count}]"))
+}
+
+/// `reply` followed by `footer`, trimming the reply (with `…`) so the pair
+/// still fits the expanded view. The footer discloses what left the machine,
+/// so a very long reply must lose its own tail, never the footer. Counts raw
+/// characters, which is at least as many as survive sanitizing.
+fn append_footer(reply: &str, footer: &str) -> String {
+    let room = MAX_EXPANDED_CHARS.saturating_sub(footer.chars().count());
+    if reply.chars().count() <= room {
+        return format!("{reply}{footer}");
+    }
+    let kept: String = reply.chars().take(room.saturating_sub(1)).collect();
+    format!("{kept}…{footer}")
 }
 
 /// Longest part of a lookup note that echoes what was sent, in characters.
@@ -160,7 +173,7 @@ pub fn with_lookup_note(reply: &str, what: &str) -> String {
     } else {
         ""
     };
-    format!("{reply} [via web: {shown}{ellipsis}]")
+    append_footer(reply, &format!(" [via web: {shown}{ellipsis}]"))
 }
 
 /// Footer for a local answer to a thin search request: nothing was sent
@@ -174,7 +187,10 @@ pub fn with_search_offer(reply: &str, query: &str) -> String {
     } else {
         ""
     };
-    format!("{reply}\n\nAnswered on this Mac only. To look it up online, say: search the web for {shown}{ellipsis}")
+    append_footer(
+        reply,
+        &format!("\n\nAnswered on this Mac only. To look it up online, say: search the web for {shown}{ellipsis}"),
+    )
 }
 
 #[cfg(test)]
@@ -304,5 +320,41 @@ mod tests {
         assert_eq!(bubble_text("a\u{1b}]0;title\u{7}b"), "ab");
         assert_eq!(bubble_text("a\u{1b}]8;;http://x\u{1b}\\link"), "alink");
         assert_eq!(bubble_text("end\u{1b}"), "end");
+    }
+
+    #[test]
+    fn footers_survive_a_reply_that_fills_the_expanded_view() {
+        let long = "x".repeat(9_000);
+        for (full, footer) in [
+            (
+                with_lookup_note(&long, "searched \"q\""),
+                "[via web: searched \"q\"]",
+            ),
+            (with_web_tools_note(&long, 2), "[via web ×2]"),
+            (with_search_offer(&long, "rust"), "search the web for rust"),
+        ] {
+            let shown = expanded_text(&full);
+            assert!(
+                shown.ends_with(footer),
+                "{footer}: {}",
+                &shown[shown.len() - 60..]
+            );
+            assert!(shown.chars().count() <= MAX_EXPANDED_CHARS);
+            assert!(
+                shown.contains("x…"),
+                "the reply, not the footer, is trimmed"
+            );
+        }
+        // A reply that fits is untouched.
+        assert_eq!(
+            with_lookup_note("short", "searched \"q\""),
+            "short [via web: searched \"q\"]"
+        );
+        // Exactly full leaves no room for a trim marker beyond the footer.
+        let exact = "y".repeat(MAX_EXPANDED_CHARS - " [via web ×1]".chars().count());
+        assert_eq!(
+            with_web_tools_note(&exact, 1),
+            format!("{exact} [via web ×1]")
+        );
     }
 }

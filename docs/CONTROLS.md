@@ -129,7 +129,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | Bubble ends in `…` | The preview shows the first six wrapped lines (at most 400 characters) and collapses runs of blank lines. **See More** shows the whole reply. |
 | `harness error: …` | Harness returned an error Avatar has no specific message for; the text after the colon is the harness's own, clipped and sanitized. |
 | `Harness is finishing another reply…` | A previous chat turn is still running; wait a moment and send again. |
-| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. |
+| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. A reply that would fill it is trimmed (ending in `…`) so the `[via web …]` note or the offer line is never the part that is cut. The 400-character preview can still hide the note; See More shows it. |
 
 For fresh native examples, see the [README screenshots](../README.md) and
 [capture provenance](screenshots/README.md). For build errors, see
