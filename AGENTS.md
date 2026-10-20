@@ -121,9 +121,13 @@ layer that can hold it.
     top_p 0.8, presence_penalty 1.5), since Ollama's OpenAI route would otherwise
     think at "medium" and sample at 1.0. An explicit lookup phrase adds one search
     or page read, run through the local daemon and passed as untrusted text.
-- **`web_intent.rs`** (pure): recognizes an explicit web lookup ("search the web
-  for …", "look up …", "google …", "read <link>") and refuses private or
-  credentialed links before any network call.
+- **`web_intent.rs`** (pure): recognizes an explicit web lookup and refuses
+  private or credentialed links before any network call. A search needs command
+  evidence: a venue plus `for` ("search the web for …"), a colon ("google: …"),
+  or a polite prefix ("please look up …"); a bare "google …" / "look up …" /
+  "search for …" becomes `Intent::Offer`, answered locally with the explicit
+  phrasing. A read verb ("read", "summarize", …) needs an `http(s)` link within
+  four words in the same clause. Queries are clipped to `MAX_QUERY_CHARS` (300).
 - **`launch.rs`**: the one deliberate exception to "does not start the harness":
   it opens `CG Agent Harness.app` by bundle ID `com.cgfixit.agent-harness` via
   Launch Services, never by path, spawned process, or arguments.

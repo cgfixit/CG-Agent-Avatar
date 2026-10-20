@@ -60,11 +60,12 @@ with a smaller viewport when screen space requires it.
 
 A Direct Ollama message reaches the web only when it is a command: it starts with
 one of these phrases and what follows reads like a request. Case doesn't matter,
-and a leading "please", "hey", "ok", "can you", or "could you" is ignored.
+and a leading "please", "pls", "hey", "ok", "okay", "can you", "could you",
+"would you", or "will you" is ignored.
 
 | Start the message with | Lookup |
 |---|---|
-| `search the web for`, `search the internet for`, `search online for`, `search the web`, `search the internet`, `search online`, `web search for`, `web search`, `search for`, `look up`, `google` | One web search for the rest of the message (up to 5 results) |
+| `search the web for`, `search the internet for`, `search online for`, `search the web`, `search the internet`, `search online`, `web search for`, `web search`, `search for`, `look up`, `google` | One web search for the rest of the message (up to 5 results). The query is clipped to 300 characters |
 | `read`, `open`, `fetch`, `summarize`, `summarise`, `visit`, followed by an `http://` or `https://` link within four plain words ("the article at", "the contents of") in the same clause | Reads that one page |
 
 A search runs only on an unmistakable command. Three rules keep ordinary
