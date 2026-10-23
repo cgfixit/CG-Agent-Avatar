@@ -7,8 +7,8 @@
 //! the real client against it. They also pin `classify_send_error`, which tells
 //! `CertMismatch` from `Unreachable` by reading error text: if a reqwest or
 //! rustls bump rewords those errors, the mismatch cases fail here instead of
-//! silently turning a rejected certificate into "harness asleep", which would
-//! let discovery fall back to plain HTTP.
+//! silently turning a rejected certificate into "harness asleep". Discovery's
+//! separate no-downgrade rule is exercised below, regardless of error classification.
 //!
 //! Certificates are minted at run time, never committed, so no key-shaped
 //! literal reaches secret scanning.
@@ -155,7 +155,7 @@ fn a_pinned_certificate_that_does_not_cover_loopback_is_rejected() {
 }
 
 #[test]
-fn a_plain_http_listener_is_never_read_by_the_pinned_client() {
+fn a_plain_http_listener_is_rejected_by_the_pinned_client() {
     let port = serve_plain();
     let cert = mint(&[loopback()]);
     assert!(
