@@ -10,6 +10,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,8 +38,7 @@ jobs:
 
       - name: Install cargo-audit 0.22.2 and audit
         env:
-          # Ignore repo rust-toolchain.toml (1.88). cargo-audit 0.22.2's
-          # unlocked graph needs rustc >= 1.96 (kstring 2.0.4).
+          # Compile the audit tool independently of the app's Rust 1.88 pin.
           RUSTUP_TOOLCHAIN: stable
         run: |
           set -euo pipefail

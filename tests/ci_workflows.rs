@@ -1,4 +1,4 @@
-//! Workflow contracts. YAML is config; these strings are the merge gate.
+//! Workflow policy contracts, complementary to actionlint's syntax and type checks.
 //!
 //! Files under `.github/workflows` are discovered at test time, not from a
 //! fixed list. Action `uses` keys and `permissions` are read with a YAML
@@ -38,6 +38,35 @@ fn audit_never_uses_pull_request_target() {
     assert!(!audit_yml().contains("pull_request_target:"));
 }
 
+#[test]
+fn audit_checks_new_advisories_without_a_commit() {
+    let workflow = parse_workflow("audit.yml", audit_yml()).unwrap();
+    let events = workflow["on"].as_hash().expect("event map");
+    for event in ["push", "pull_request", "schedule", "workflow_dispatch"] {
+        assert!(hash_get(events, event).is_some(), "missing {event}");
+    }
+    assert_eq!(
+        workflow["on"]["schedule"][0]["cron"].as_str(),
+        Some("17 9 * * *")
+    );
+}
+
+#[test]
+fn pull_requests_lint_workflows_and_shell_scripts() {
+    let workflow = parse_workflow("ci.yml", include_str!("../.github/workflows/ci.yml")).unwrap();
+    let steps = workflow["jobs"]["workflow-lint"]["steps"].as_vec().unwrap();
+    let run = steps
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(run.contains("actionlint_1.7.12_linux_amd64.tar.gz"));
+    assert!(run.contains("8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"));
+    assert!(run.contains("sha256sum -c -"));
+    assert!(run.contains("\"$RUNNER_TEMP/actionlint\" -color"));
+    assert!(run.contains("shellcheck scripts/*.sh"));
+}
+
 fn bundle_yml() -> &'static str {
     include_str!("../.github/workflows/bundle.yml")
 }
@@ -67,7 +96,7 @@ fn bundle_pin_dtolnay_requires_toolchain_input() {
     let y = bundle_yml();
     assert!(
         y.contains("toolchain: 1.88"),
-        "dtolnay/rust-toolchain@6c977a6 requires toolchain; omit fails with 'toolchain is a required input'"
+        "the pinned rust-toolchain action requires the release toolchain input"
     );
 }
 
@@ -148,9 +177,11 @@ fn bundle_ships_a_checksum_smoke_checks_the_app_and_keeps_notes_out_of_the_scrip
         y.matches("CG-Agent-MacOS-Avatar.zip.sha256").count() >= 4,
         "checksum is written, uploaded, downloaded, and attached to the release"
     );
-    assert!(y.contains("codesign --verify"));
-    assert!(y.contains("lipo -archs"));
-    assert!(y.contains("com.cgfixit.cg-agent"));
+    assert!(y.contains("run: ./scripts/verify-app.sh"));
+    let verifier = include_str!("../scripts/verify-app.sh");
+    assert!(verifier.contains("codesign --verify --deep --strict"));
+    assert!(verifier.contains("lipo -archs"));
+    assert!(verifier.contains("assert_plist CFBundleIdentifier com.cgfixit.cg-agent"));
     let create = y.split("- name: Create GitHub Release").nth(1).unwrap();
     assert!(create.contains("USER_NOTES: ${{ github.event.inputs.notes }}"));
     assert!(create.contains("--notes-file release-notes.md"));
@@ -199,6 +230,7 @@ fn pull_requests_test_the_release_toolchain_on_macos() {
         .unwrap();
     assert!(msrv.contains("runs-on: macos-latest"));
     assert!(msrv.contains(&format!("toolchain: {toolchain}")));
+    assert!(msrv.contains("./scripts/package-app.sh\n          ./scripts/verify-app.sh"));
     assert!(msrv.contains("cargo test --locked --all-targets"));
 }
 

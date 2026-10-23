@@ -2,7 +2,7 @@
 # never moves GitHub Latest. workflow_dispatch from main publishes a full
 # release and, when mark_latest is true (the default), marks it Latest; an
 # optional `notes` input is appended to the release notes. Every build is
-# smoke-checked (arm64, bundle ID, ad-hoc signature) and ships a SHA-256 file.
+# verified by the same script as PR CI and ships a SHA-256 file.
 # Pinning:
 # https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions
 # No pull_request_target. No cancel-in-progress (do not cancel a publish).
@@ -56,14 +56,7 @@ jobs:
         run: ./scripts/package-app.sh
 
       - name: Smoke-check .app
-        run: |
-          set -euo pipefail
-          app=dist/CG-Agent-MacOS-Avatar.app
-          archs=$(lipo -archs "$app/Contents/MacOS/cg-agent")
-          [ "$archs" = "arm64" ] || { echo "expected arm64, got: $archs"; exit 1; }
-          id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")
-          [ "$id" = "com.cgfixit.cg-agent" ] || { echo "unexpected bundle id: $id"; exit 1; }
-          codesign --verify --strict --verbose=2 "$app"
+        run: ./scripts/verify-app.sh
 
       - name: Zip .app
         run: |
