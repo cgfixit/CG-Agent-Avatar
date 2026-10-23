@@ -37,24 +37,27 @@ build or missing executable leaves the previous bundle intact. It is not notariz
 the app nor build output belongs in git. Validate the result with:
 
 ```sh
-codesign --verify --deep --strict dist/CG-Agent-MacOS-Avatar.app
-plutil -lint dist/CG-Agent-MacOS-Avatar.app/Contents/Info.plist
+./scripts/verify-app.sh
 ```
 
 ## Releases
 
 The **bundle** workflow packages the `.app` with Rust 1.88 on `macos-latest`,
-smoke-checks it (arm64 only, bundle ID `com.cgfixit.cg-agent`, `codesign
---verify`), zips it, and writes `CG-Agent-MacOS-Avatar.zip.sha256`. To cut a
-release by hand, run it from the Actions tab (*Run workflow*) on `main`: it
+verifies its architecture, bundle identity, accessory/ATS settings, artwork, and
+signature with `scripts/verify-app.sh`, zips it, and writes
+`CG-Agent-MacOS-Avatar.zip.sha256`. To cut a release by hand, run it from the
+Actions tab (*Run workflow*) on `main`: it
 publishes a full release with both files, marks it Latest unless you untick
 `mark_latest`, and appends the optional `notes` input to the release notes.
-Other branches publish prereleases. The smoke check and checksum run only on
-macOS, so they are first exercised by a hosted run.
+Other branches publish prereleases. PR CI builds and verifies the same `.app`
+with Rust 1.88 before merge; publishing remains exclusive to `bundle`. The
+verifier also runs locally on Apple Silicon macOS without launching the app.
 
 ## Local checks and hosted CI
 
-`./scripts/ci.sh` runs formatting, Clippy with warnings denied, and all test
+For a local change, run the affected command or test target; leave the full
+regression matrix to hosted CI. `./scripts/ci.sh` is available for an explicitly
+requested full run of formatting, Clippy with warnings denied, and all test
 targets. On Linux, including Claude Code on the web and Codex cloud, the same
 script covers the portable modules and every contract test, but `src/app.rs` is
 compiled only on macOS. AppKit changes therefore need the macOS CI jobs. If `cargo-deny` is installed, it also checks dependency advisories,
@@ -82,11 +85,17 @@ Cargo Deny's advisory fetch is a separate operation; `cargo deny --offline
 |---|---|---|
 | fmt, Clippy, tests | Rust 1.88, current host | Current stable on Ubuntu and macOS |
 | Release-toolchain compatibility | Same pinned local toolchain | Rust 1.88 tests on macOS, including AppKit |
-| Release build | `./scripts/package-app.sh` | Stable in `ci`; Rust 1.88 in `bundle` |
+| Release build and package | `./scripts/package-app.sh` then `./scripts/verify-app.sh` | Stable binary build; Rust 1.88 package verification in both `ci` and `bundle` |
+| Workflows and shell scripts | `actionlint -color` and `shellcheck scripts/*.sh` | Checksum-pinned actionlint 1.7.12 plus runner ShellCheck |
 | Dependency policy | Cargo Deny when installed | Required `cargo-deny` job |
-| Vulnerability audit | `cargo audit` | Pinned Cargo Audit 0.22.2 |
+| Vulnerability audit | `cargo audit` | Pinned Cargo Audit 0.22.2 on pushes, PRs, manual dispatch, and daily at 09:17 UTC |
 | Secret scan | Run Gitleaks separately | Pinned Gitleaks with archive checksum verification |
 | Native interaction/screenshots | Manual Computer Use on the built app | Not covered by hosted unit tests |
+
+Scheduled audits check for newly published advisories even when the lockfile
+has not changed. GitHub runs schedules from the default branch, so this trigger
+starts after the workflow change is merged. Workflow linting needs network
+access for its checksum-verified actionlint download.
 
 The TLS stack is `reqwest` 0.13 on rustls with the `ring` crypto provider,
 selected by `src/tls.rs` through reqwest's `rustls-no-provider` feature. 0.13
