@@ -9,6 +9,8 @@ the same checks CI runs.
 The native app targets Apple Silicon macOS 13+. You need:
 
 - Apple's Command Line Tools: `xcode-select --install`
+- Python 3.8 or newer (`python3`, included with current Command Line Tools),
+  used to read Cargo's executable path when packaging.
 - Rust through [rustup](https://rustup.rs). `rust-toolchain.toml` selects Rust
   **1.88** with rustfmt and Clippy, and rustup installs it on the first `cargo`
   call in this directory.
@@ -29,7 +31,9 @@ same pin and `--locked`, so a missing or outdated `Cargo.lock` fails instead of
 changing the dependency graph during a build.
 
 The package script creates `dist/CG-Agent-MacOS-Avatar.app`, replaces an existing
-bundle at that output path, and ad-hoc signs it. It is not notarized, and neither
+bundle at that output path, and ad-hoc signs it. It copies the executable reported
+by Cargo, honoring `CARGO_TARGET_DIR` and Cargo target configuration. A failed
+build or missing executable leaves the previous bundle intact. It is not notarized, and neither
 the app nor build output belongs in git. Validate the result with:
 
 ```sh
