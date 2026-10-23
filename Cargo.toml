@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-description = "Menu-bar creature companion for a running CG-Agent-Harness"
+description = "Menu-bar creature companion that chats with a local Ollama or a running CG-Agent-Harness over loopback"
 publish = false
 
 [lib]

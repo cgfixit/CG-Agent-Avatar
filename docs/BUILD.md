@@ -1,22 +1,32 @@
 # Build and verify
 
-The native app targets Apple Silicon macOS 13+. Install Apple's Command Line
-Tools (`xcode-select --install`) and Rust through rustup. Run commands from the
-repository root with rustup's binaries first on `PATH`:
+If you only want to run the app, the [README](../README.md#install) explains
+how to download a release. This page is for building it yourself and running
+the same checks CI runs.
+
+## Prerequisites
+
+The native app targets Apple Silicon macOS 13+. You need:
+
+- Apple's Command Line Tools: `xcode-select --install`
+- Rust through [rustup](https://rustup.rs). `rust-toolchain.toml` selects Rust
+  **1.88** with rustfmt and Clippy, and rustup installs it on the first `cargo`
+  call in this directory.
+
+Run commands from the repository root with rustup's binaries first on `PATH`:
 
 ```sh
 export PATH="$HOME/.cargo/bin:$PATH"
-rustup show active-toolchain
-./scripts/ci.sh
-./scripts/package-app.sh
+rustup show active-toolchain        # should print 1.88
+./scripts/ci.sh                     # fmt, Clippy, tests (and cargo-deny when installed)
+./scripts/package-app.sh            # builds dist/CG-Agent-MacOS-Avatar.app
 open dist/CG-Agent-MacOS-Avatar.app
 ```
 
-`rust-toolchain.toml` selects Rust **1.88**, including rustfmt and Clippy. Use
-`cargo clippy` from that toolchain; mixing a Homebrew Clippy with rustup's Cargo
-can produce incompatible compiler metadata. Packaging uses the same pin and
-`--locked`, so a missing or outdated `Cargo.lock` fails instead of changing the
-dependency graph during a build.
+Use `cargo clippy` from the rustup toolchain; mixing a Homebrew Clippy with
+rustup's Cargo can produce incompatible compiler metadata. Packaging uses the
+same pin and `--locked`, so a missing or outdated `Cargo.lock` fails instead of
+changing the dependency graph during a build.
 
 The package script creates `dist/CG-Agent-MacOS-Avatar.app`, replaces an existing
 bundle at that output path, and ad-hoc signs it. It is not notarized, and neither
@@ -85,12 +95,26 @@ change. Dependabot still ignores reqwest semver-major updates, so a later major
 — which would change the TLS API again — stays a reviewed migration rather than
 an automatic bump.
 
+## Updating dependencies
+
 All dependency-resolving build/test commands use `--locked`. Review intentional
 updates to `Cargo.toml` and `Cargo.lock` together, then rerun checks; a passing
 locked build verifies the committed resolution, not that every crate is the
-newest published version. Run `cargo update --dry-run` to check whether newer
-compatible versions would change the lockfile without editing it. Dependabot
-checks Cargo and Actions weekly.
+newest published version. To refresh the lockfile by hand:
+
+```sh
+cargo update --dry-run      # list newer compatible versions without editing
+cargo update                # apply them
+./scripts/ci.sh             # prove 1.88 still builds and the contract tests pass
+```
+
+The crate is edition 2021, so Cargo does not hold back crates whose minimum
+Rust version exceeds 1.88; if a refreshed lockfile fails to build on the pinned
+toolchain, pin that crate back in `Cargo.lock` with `cargo update <crate>
+--precise <version>`. Dependabot proposes Cargo and Actions updates weekly, after
+a 7-day cooldown on each new release, and groups minor and patch Cargo bumps
+and the `objc2*` crates into single PRs. Semver-major reqwest updates are
+excluded from Dependabot on purpose (see above).
 
 ## Backend setup
 
