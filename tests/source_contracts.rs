@@ -1,4 +1,4 @@
-//! Source-level contracts. If someone adds an agent route to the client, CI fails.
+//! Source and serialized-request contracts for the current client boundaries.
 
 #[test]
 fn client_never_mentions_agent_routes() {
@@ -45,6 +45,23 @@ fn forbidden_paths_are_documented() {
         assert!(!cg_agent::paths::is_allowed_get(p));
         assert!(!cg_agent::paths::is_allowed_post(p));
     }
+}
+
+#[test]
+fn harness_allowlist_is_limited_to_read_chat_and_self_auth() {
+    assert_eq!(
+        cg_agent::paths::ALLOWED_GET,
+        ["/", "/api/status", "/api/sessions"]
+    );
+    assert_eq!(
+        cg_agent::paths::ALLOWED_POST,
+        [
+            "/api/sessions",
+            "/api/chat",
+            "/api/auth/login",
+            "/api/auth/password",
+        ]
+    );
 }
 
 #[test]
