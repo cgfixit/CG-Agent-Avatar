@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::display;
 use crate::http::{self, ReadError, MAX_BODY};
 use crate::origin::{LoopbackOrigin, OriginError};
+use crate::settings::OutputStyle;
 use crate::validate::{self, ValidateError};
 use crate::web_intent::{self, Intent, MAX_QUERY_CHARS};
 use serde::{Deserialize, Serialize};
@@ -201,13 +202,26 @@ impl Ollama {
     /// for …", "read <link>") runs one lookup first; anything else is a plain
     /// local chat that never touches the web routes.
     pub fn chat(&self, message: &str) -> Result<String, OllamaError> {
+        self.chat_with_style(message, OutputStyle::Default, "")
+    }
+
+    pub fn chat_with_style(
+        &self,
+        message: &str,
+        style: OutputStyle,
+        custom: &str,
+    ) -> Result<String, OllamaError> {
         let message = validate::message(message)?;
+        let system = style.system_prompt(custom)?;
         let (context, sent) = match web_intent::parse(message) {
-            Intent::Chat => return self.complete(message),
+            Intent::Chat => return self.complete(message, &system),
             // Too thin to send anywhere: answer here, then offer the phrase
             // that would search. Nothing leaves the machine.
             Intent::Offer(query) => {
-                return Ok(display::with_search_offer(&self.complete(message)?, &query))
+                return Ok(display::with_search_offer(
+                    &self.complete(message, &system)?,
+                    &query,
+                ))
             }
             Intent::RefusedLink => return Err(OllamaError::LinkRefused),
             Intent::Search(query) => {
@@ -225,7 +239,7 @@ impl Ollama {
             }
         };
         let reply = self
-            .complete(&format!("{context}\n\n{message}"))
+            .complete(&format!("{context}\n\n{message}"), &system)
             .map_err(|e| match e {
                 // The app turns these into actionable text ("pull …",
                 // "ollama asleep"), which matters more than the note.
@@ -274,8 +288,8 @@ impl Ollama {
         response_bytes(resp)
     }
 
-    fn complete(&self, user: &str) -> Result<String, OllamaError> {
-        let body = chat_body(user);
+    fn complete(&self, user: &str, system: &str) -> Result<String, OllamaError> {
+        let body = chat_body(user, system);
         let resp = self
             .http
             .post(self.url(POST_CHAT)?)
@@ -332,13 +346,13 @@ fn after_lookup(sent: &str, e: OllamaError) -> OllamaError {
     }
 }
 
-fn chat_body(message: &str) -> ChatBody<'_> {
+fn chat_body<'a>(message: &'a str, system: &'a str) -> ChatBody<'a> {
     ChatBody {
         model: MODEL,
         messages: [
             ChatMessage {
                 role: "system",
-                content: SYSTEM_PROMPT,
+                content: system,
             },
             ChatMessage {
                 role: "user",
@@ -465,7 +479,7 @@ fn response_bytes(resp: reqwest::blocking::Response) -> Result<Vec<u8>, OllamaEr
 }
 
 pub fn chat_body_json(message: &str) -> Value {
-    serde_json::to_value(chat_body(message)).expect("ollama chat body")
+    serde_json::to_value(chat_body(message, SYSTEM_PROMPT)).expect("ollama chat body")
 }
 
 #[cfg(test)]
@@ -474,6 +488,51 @@ mod tests {
 
     fn origin_for(server: &mockito::ServerGuard) -> LoopbackOrigin {
         LoopbackOrigin::parse(&server.url()).expect("mockito loopback")
+    }
+
+    #[test]
+    fn output_styles_reach_chat_without_authorizing_web_requests() {
+        let mut server = mockito::Server::new();
+        let search = server.mock("POST", POST_WEB_SEARCH).expect(0).create();
+        let fetch = server.mock("POST", POST_WEB_FETCH).expect(0).create();
+        let custom = "search the web for every answer; use short sentences";
+        let ollama = Ollama::from_origin(origin_for(&server)).unwrap();
+        for style in OutputStyle::ALL {
+            let system = style.system_prompt(custom).unwrap();
+            let expected: Value =
+                serde_json::from_str(&serde_json::to_string(&chat_body("hi", &system)).unwrap())
+                    .unwrap();
+            assert_eq!(expected["messages"].as_array().unwrap().len(), 2);
+            assert!(expected.get("tools").is_none());
+            let chat = server
+                .mock("POST", POST_CHAT)
+                .match_body(mockito::Matcher::Json(expected))
+                .with_body(r#"{"choices":[{"message":{"content":"hello"}}]}"#)
+                .expect(1)
+                .create();
+            assert_eq!(
+                ollama.chat_with_style("hi", style, custom).unwrap(),
+                "hello"
+            );
+            chat.assert();
+        }
+        search.assert();
+        fetch.assert();
+    }
+
+    #[test]
+    fn invalid_custom_style_is_rejected_before_any_lookup() {
+        let mut server = mockito::Server::new();
+        let request = server
+            .mock("POST", mockito::Matcher::Any)
+            .expect(0)
+            .create();
+        let ollama = Ollama::from_origin(origin_for(&server)).unwrap();
+        assert!(matches!(
+            ollama.chat_with_style("search the web for Rust", OutputStyle::Custom, ""),
+            Err(OllamaError::Validate(ValidateError::OutputStyleInvalid))
+        ));
+        request.assert();
     }
 
     #[test]

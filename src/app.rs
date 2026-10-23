@@ -15,13 +15,14 @@ use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
     NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType, NSBezelStyle,
     NSButton, NSColor, NSCompositingOperation, NSControlStateValueOff, NSControlStateValueOn,
-    NSEvent, NSFont, NSImage, NSMenu, NSMenuItem, NSPanel, NSScreen, NSScrollView,
-    NSSecureTextField, NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSStatusWindowLevel,
-    NSTextField, NSTextView, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSEvent, NSFont, NSImage, NSMenu, NSMenuItem, NSNormalWindowLevel, NSPanel, NSPopUpButton,
+    NSScreen, NSScrollView, NSSecureTextField, NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
+    NSStatusWindowLevel, NSTextField, NSTextView, NSView, NSWindow, NSWindowCollectionBehavior,
+    NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSData, NSNotification, NSObject, NSObjectProtocol, NSPoint,
-    NSRect, NSSize, NSString, NSTimer,
+    NSRect, NSSize, NSString, NSTimer, NSUserDefaults,
 };
 
 use crate::client::{Client, ClientError, SessionJar, Status};
@@ -32,6 +33,7 @@ use crate::home;
 use crate::mood::{self, Health, Mood};
 use crate::ollama::{self, Ollama, OllamaError};
 use crate::origin::LoopbackOrigin;
+use crate::settings::{OutputStyle, Settings};
 use crate::theme;
 use crate::validate;
 
@@ -49,7 +51,7 @@ const MOOD_EVERY: Duration = Duration::from_millis(250);
 struct Shared {
     mood: Mutex<Mood>,
     last_reply: Mutex<String>,
-    pending: Mutex<Option<(u8, u64, String)>>,
+    pending: Mutex<Option<PendingChat>>,
     pending_login: Mutex<Option<(u64, String, String)>>,
     pending_password_change: Mutex<Option<(u64, String, String)>>,
     in_flight: AtomicBool,
@@ -62,6 +64,24 @@ struct Shared {
     jar: Arc<SessionJar>,
     /// Set after login or a password change to re-check status right away.
     repoll: AtomicBool,
+}
+
+struct PendingChat {
+    backend: u8,
+    generation: u64,
+    message: String,
+    style: OutputStyle,
+    custom_style: String,
+}
+
+struct SettingsWindow {
+    window: Retained<NSWindow>,
+    style: Retained<NSPopUpButton>,
+    custom: Retained<NSTextView>,
+    reduce_motion: Retained<NSButton>,
+    all_spaces: Retained<NSButton>,
+    keep_above: Retained<NSButton>,
+    error: Retained<NSTextField>,
 }
 
 struct Walk {
@@ -119,6 +139,8 @@ struct OverlayLayout {
     button: NSPoint,
     close: NSPoint,
     backend: NSRect,
+    style: NSRect,
+    settings: NSPoint,
     input: NSRect,
     send: NSPoint,
     text_size: NSSize,
@@ -173,6 +195,8 @@ impl OverlayLayout {
         .clamp(0.0, (screen.size.height - height).max(0.0));
         let close_x = width - m.padding - m.action_w;
         let button_x = close_x - m.gap - m.see_more_w;
+        let settings_x = button_x - m.gap - m.action_w;
+        let style_x = settings_x - m.gap - m.style_w;
         let input_x = creature_width(m) + m.gap;
         let send_x = width - m.action_w;
         let reply_w = (width - m.padding * 2.0).max(1.0);
@@ -194,8 +218,13 @@ impl OverlayLayout {
             close: NSPoint::new(close_x, toolbar_y),
             backend: NSRect::new(
                 NSPoint::new(m.padding, toolbar_y + (m.toolbar_h - m.reply_line_h) / 2.0),
-                NSSize::new((button_x - m.padding - m.gap).max(1.0), m.reply_line_h),
+                NSSize::new((style_x - m.padding - m.gap).max(1.0), m.reply_line_h),
             ),
+            style: NSRect::new(
+                NSPoint::new(style_x, toolbar_y),
+                NSSize::new(m.style_w, m.see_more_h),
+            ),
+            settings: NSPoint::new(settings_x, toolbar_y),
             input: NSRect::new(
                 NSPoint::new(input_x, m.input_y),
                 NSSize::new((send_x - m.gap - input_x).max(1.0), m.input_h),
@@ -225,6 +254,11 @@ struct DelegateIvars {
     backend_label: RefCell<Option<Retained<NSTextField>>>,
     harness_item: RefCell<Option<Retained<NSMenuItem>>>,
     ollama_item: RefCell<Option<Retained<NSMenuItem>>>,
+    style_control: RefCell<Option<Retained<NSPopUpButton>>>,
+    settings_button: RefCell<Option<Retained<NSButton>>>,
+    style_items: RefCell<Vec<Retained<NSMenuItem>>>,
+    settings_window: RefCell<Option<SettingsWindow>>,
+    settings: RefCell<Settings>,
     walk: RefCell<Walk>,
     reply_presentation: RefCell<ReplyPresentation>,
     shared: Arc<Shared>,
@@ -296,6 +330,41 @@ define_class!(
         #[unsafe(method(toggleReply:))]
         fn toggle_reply_action(&self, _sender: Option<&AnyObject>) {
             self.toggle_reply();
+        }
+
+        #[unsafe(method(openSettings:))]
+        fn settings_action(&self, _sender: Option<&AnyObject>) {
+            self.open_settings();
+        }
+
+        #[unsafe(method(saveSettings:))]
+        fn save_settings_action(&self, _sender: Option<&AnyObject>) {
+            self.save_settings();
+        }
+
+        #[unsafe(method(cancelSettings:))]
+        fn cancel_settings_action(&self, _sender: Option<&AnyObject>) {
+            if let Some(settings) = self.ivars().settings_window.borrow().as_ref() {
+                settings.window.orderOut(None);
+            }
+        }
+
+        #[unsafe(method(changeStyle:))]
+        fn change_style(&self, sender: &NSPopUpButton) {
+            self.select_style(sender.indexOfSelectedItem());
+        }
+
+        #[unsafe(method(changeMenuStyle:))]
+        fn change_menu_style(&self, sender: &NSMenuItem) {
+            self.select_style(sender.tag());
+        }
+
+        #[unsafe(method(editStyle:))]
+        fn edit_style(&self, sender: &NSPopUpButton) {
+            if let Some(settings) = self.ivars().settings_window.borrow().as_ref() {
+                settings.custom.setEditable(sender.indexOfSelectedItem() == 3);
+                settings.error.setStringValue(ns_string!(""));
+            }
         }
 
         #[unsafe(method(quit:))]
@@ -470,6 +539,16 @@ impl Delegate {
             backend_label: RefCell::new(None),
             harness_item: RefCell::new(None),
             ollama_item: RefCell::new(None),
+            style_control: RefCell::new(None),
+            settings_button: RefCell::new(None),
+            style_items: RefCell::new(Vec::new()),
+            settings_window: RefCell::new(None),
+            settings: RefCell::new(
+                NSUserDefaults::standardUserDefaults()
+                    .stringForKey(ns_string!("AvatarSettings"))
+                    .map(|value| Settings::from_json(&value.to_string()))
+                    .unwrap_or_default(),
+            ),
             walk: RefCell::new(Walk {
                 x: 24.0,
                 dir: 1.0,
@@ -562,8 +641,70 @@ impl Delegate {
         menu.addItem(&login);
         menu.addItem(&reset);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
+        let styles = Self::menu_item(mtm, ns_string!("Ollama Output Style"), sel!(openSettings:));
+        let style_menu = NSMenu::new(mtm);
+        for (index, style) in OutputStyle::ALL.iter().enumerate() {
+            let entry = Self::menu_item(
+                mtm,
+                &NSString::from_str(style.label()),
+                sel!(changeMenuStyle:),
+            );
+            entry.setTag(index as isize);
+            unsafe {
+                entry.setTarget(Some(self.as_ref()));
+            }
+            style_menu.addItem(&entry);
+            self.ivars().style_items.borrow_mut().push(entry);
+        }
+        styles.setSubmenu(Some(&style_menu));
+        menu.addItem(&styles);
+        let settings = Self::menu_item(mtm, ns_string!("Settings…"), sel!(openSettings:));
+        settings.setKeyEquivalent(ns_string!(","));
+        unsafe {
+            settings.setTarget(Some(self.as_ref()));
+        }
+        menu.addItem(&settings);
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&quit);
         item.setMenu(Some(&menu));
+        // Status-menu key equivalents do not run while a text window is active.
+        let main_menu = NSMenu::new(mtm);
+        for (title, entries, target) in [
+            (
+                "CG Agent",
+                vec![
+                    ("Settings…", sel!(openSettings:), ","),
+                    ("Quit CG Agent", sel!(quit:), "q"),
+                ],
+                Some(self.as_ref()),
+            ),
+            (
+                "Edit",
+                vec![
+                    ("Cut", sel!(cut:), "x"),
+                    ("Copy", sel!(copy:), "c"),
+                    ("Paste", sel!(paste:), "v"),
+                    ("Select All", sel!(selectAll:), "a"),
+                ],
+                None,
+            ),
+        ] {
+            let root = NSMenuItem::new(mtm);
+            root.setTitle(&NSString::from_str(title));
+            let submenu = NSMenu::new(mtm);
+            submenu.setTitle(&NSString::from_str(title));
+            for (label, action, key) in entries {
+                let entry = Self::menu_item(mtm, &NSString::from_str(label), action);
+                entry.setKeyEquivalent(&NSString::from_str(key));
+                unsafe {
+                    entry.setTarget(target);
+                }
+                submenu.addItem(&entry);
+            }
+            root.setSubmenu(Some(&submenu));
+            main_menu.addItem(&root);
+        }
+        app.setMainMenu(Some(&main_menu));
         *self.ivars().harness_item.borrow_mut() = Some(harness);
         *self.ivars().ollama_item.borrow_mut() = Some(ollama);
 
@@ -752,6 +893,20 @@ impl Delegate {
         backend_label.setHidden(true);
         overlay.addSubview(&backend_label);
 
+        let style_control = self.style_popup(layout.style, sel!(changeStyle:), true);
+        style_control.setHidden(true);
+        style_control.setToolTip(Some(ns_string!(
+            "Output style for the next Direct Ollama message"
+        )));
+        overlay.addSubview(&style_control);
+        let settings_button = make_button(
+            ns_string!("Settings…"),
+            layout.settings,
+            sel!(openSettings:),
+        );
+        settings_button.setToolTip(Some(ns_string!("Output style and macOS window settings")));
+        *self.ivars().style_control.borrow_mut() = Some(style_control);
+        *self.ivars().settings_button.borrow_mut() = Some(settings_button);
         *self.ivars().status_item.borrow_mut() = Some(item);
         *self.ivars().panel.borrow_mut() = Some(panel.clone());
         *self.ivars().overlay.borrow_mut() = Some(overlay);
@@ -766,6 +921,7 @@ impl Delegate {
         *self.ivars().close.borrow_mut() = Some(close);
         *self.ivars().backend_label.borrow_mut() = Some(backend_label);
 
+        self.apply_settings();
         panel.orderFront(None);
 
         unsafe {
@@ -778,6 +934,263 @@ impl Delegate {
             );
         }
         let _ = app;
+    }
+
+    fn style_popup(&self, frame: NSRect, action: Sel, toolbar: bool) -> Retained<NSPopUpButton> {
+        let popup =
+            NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(self.mtm()), frame, false);
+        for style in OutputStyle::ALL {
+            let title = if toolbar {
+                format!("Style: {}", style.label())
+            } else {
+                style.label().into()
+            };
+            popup.addItemWithTitle(&NSString::from_str(&title));
+        }
+        popup.setAccessibilityLabel(Some(ns_string!("Direct Ollama output style")));
+        unsafe {
+            popup.setTarget(Some(self.as_ref()));
+            popup.setAction(Some(action));
+        }
+        popup
+    }
+
+    fn persist_settings(&self) {
+        let value = serde_json::to_string(&*self.ivars().settings.borrow()).expect("settings JSON");
+        unsafe {
+            NSUserDefaults::standardUserDefaults().setObject_forKey(
+                Some(&NSString::from_str(&value)),
+                ns_string!("AvatarSettings"),
+            );
+        }
+        self.apply_settings();
+    }
+
+    fn apply_settings(&self) {
+        let settings = self.ivars().settings.borrow();
+        if let Some(panel) = self.ivars().panel.borrow().as_ref() {
+            panel.setLevel(if settings.keep_above {
+                NSStatusWindowLevel
+            } else {
+                NSNormalWindowLevel
+            });
+            panel.setCollectionBehavior(
+                NSWindowCollectionBehavior::Stationary
+                    | NSWindowCollectionBehavior::IgnoresCycle
+                    | if settings.all_spaces {
+                        NSWindowCollectionBehavior::CanJoinAllSpaces
+                            | NSWindowCollectionBehavior::FullScreenAuxiliary
+                    } else {
+                        NSWindowCollectionBehavior::empty()
+                    },
+            );
+        }
+        let index = OutputStyle::ALL
+            .iter()
+            .position(|style| *style == settings.output_style)
+            .unwrap();
+        if let Some(popup) = self.ivars().style_control.borrow().as_ref() {
+            popup.selectItemAtIndex(index as isize);
+        }
+        for (i, item) in self.ivars().style_items.borrow().iter().enumerate() {
+            item.setState(if i == index {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
+        }
+    }
+
+    fn select_style(&self, index: isize) {
+        let Some(style) = usize::try_from(index)
+            .ok()
+            .and_then(|i| OutputStyle::ALL.get(i))
+            .copied()
+        else {
+            return;
+        };
+        if style == OutputStyle::Custom
+            && validate::output_style(&self.ivars().settings.borrow().custom_style).is_err()
+        {
+            self.apply_settings();
+            self.open_settings();
+            if let Some(settings) = self.ivars().settings_window.borrow().as_ref() {
+                settings.style.selectItemAtIndex(3);
+                settings.custom.setEditable(true);
+                let _ = settings.window.makeFirstResponder(Some(&settings.custom));
+            }
+            return;
+        }
+        self.ivars().settings.borrow_mut().output_style = style;
+        self.persist_settings();
+    }
+
+    fn open_settings(&self) {
+        let mtm = self.mtm();
+        if self.ivars().settings_window.borrow().is_none() {
+            let window = unsafe {
+                NSWindow::initWithContentRect_styleMask_backing_defer(
+                    NSWindow::alloc(mtm),
+                    NSRect::new(NSPoint::ZERO, NSSize::new(560.0, 510.0)),
+                    NSWindowStyleMask::Titled
+                        | NSWindowStyleMask::Closable
+                        | NSWindowStyleMask::Miniaturizable,
+                    NSBackingStoreType::Buffered,
+                    false,
+                )
+            };
+            unsafe {
+                window.setReleasedWhenClosed(false);
+            }
+            window.setTitle(ns_string!("CG Agent Settings"));
+            window.center();
+            let view = window.contentView().expect("settings content view");
+            let label = |text: &str, y: f64, height: f64| {
+                let label = NSTextField::wrappingLabelWithString(&NSString::from_str(text), mtm);
+                label.setFrame(NSRect::new(
+                    NSPoint::new(24.0, y),
+                    NSSize::new(512.0, height),
+                ));
+                view.addSubview(&label);
+                label
+            };
+            label("General", 474.0, 22.0).setFont(Some(&NSFont::boldSystemFontOfSize(15.0)));
+            let checkbox = |title: &str, y: f64| {
+                let button = unsafe {
+                    NSButton::checkboxWithTitle_target_action(
+                        &NSString::from_str(title),
+                        None,
+                        None,
+                        mtm,
+                    )
+                };
+                button.setFrame(NSRect::new(NSPoint::new(24.0, y), NSSize::new(512.0, 24.0)));
+                view.addSubview(&button);
+                button
+            };
+            let reduce_motion = checkbox("Reduce motion (also follows macOS Reduce Motion)", 440.0);
+            let all_spaces = checkbox("Show avatar on all Spaces", 408.0);
+            let keep_above = checkbox("Keep avatar above other windows", 376.0);
+            label("Direct Ollama", 330.0, 22.0).setFont(Some(&NSFont::boldSystemFontOfSize(15.0)));
+            let style = self.style_popup(
+                NSRect::new(NSPoint::new(24.0, 292.0), NSSize::new(220.0, 28.0)),
+                sel!(editStyle:),
+                false,
+            );
+            view.addSubview(&style);
+            label(
+                "Applies to your next Direct Ollama message. Harness uses its own style.",
+                250.0,
+                34.0,
+            );
+            label("Custom instructions (1–2,048 characters)", 222.0, 22.0);
+            let scroll = NSScrollView::initWithFrame(
+                NSScrollView::alloc(mtm),
+                NSRect::new(NSPoint::new(24.0, 108.0), NSSize::new(512.0, 110.0)),
+            );
+            scroll.setHasVerticalScroller(true);
+            scroll.setAutohidesScrollers(true);
+            let custom = NSTextView::initWithFrame(
+                NSTextView::alloc(mtm),
+                NSRect::new(NSPoint::ZERO, NSSize::new(492.0, 110.0)),
+            );
+            custom.setRichText(false);
+            custom.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+            custom.setTextContainerInset(NSSize::new(6.0, 6.0));
+            custom.setVerticallyResizable(true);
+            custom.setAccessibilityLabel(Some(ns_string!("Custom output instructions")));
+            scroll.setDocumentView(Some(&custom));
+            view.addSubview(&scroll);
+            label(
+                "Saved on this Mac. Custom instructions are sent only to local Ollama.",
+                80.0,
+                22.0,
+            )
+            .setFont(Some(&NSFont::systemFontOfSize(11.0)));
+            let error = label("", 46.0, 32.0);
+            error.setTextColor(Some(&NSColor::systemRedColor()));
+            error.setAccessibilityLabel(Some(ns_string!("Settings validation")));
+            for (title, x, action, key) in [
+                ("Cancel", 344.0, sel!(cancelSettings:), "\u{1b}"),
+                ("Save", 444.0, sel!(saveSettings:), "\r"),
+            ] {
+                let button = unsafe {
+                    NSButton::buttonWithTitle_target_action(
+                        &NSString::from_str(title),
+                        Some(self.as_ref()),
+                        Some(action),
+                        mtm,
+                    )
+                };
+                button.setFrame(NSRect::new(NSPoint::new(x, 10.0), NSSize::new(92.0, 32.0)));
+                button.setKeyEquivalent(&NSString::from_str(key));
+                view.addSubview(&button);
+            }
+            *self.ivars().settings_window.borrow_mut() = Some(SettingsWindow {
+                window,
+                style,
+                custom,
+                reduce_motion,
+                all_spaces,
+                keep_above,
+                error,
+            });
+        }
+        let window = self.ivars().settings_window.borrow();
+        let controls = window.as_ref().unwrap();
+        if !controls.window.isVisible() {
+            let settings = self.ivars().settings.borrow();
+            let index = OutputStyle::ALL
+                .iter()
+                .position(|style| *style == settings.output_style)
+                .unwrap();
+            controls.style.selectItemAtIndex(index as isize);
+            controls
+                .custom
+                .setString(&NSString::from_str(&settings.custom_style));
+            controls
+                .custom
+                .setEditable(settings.output_style == OutputStyle::Custom);
+            for (control, value) in [
+                (&controls.reduce_motion, settings.reduce_motion),
+                (&controls.all_spaces, settings.all_spaces),
+                (&controls.keep_above, settings.keep_above),
+            ] {
+                control.setState(if value {
+                    NSControlStateValueOn
+                } else {
+                    NSControlStateValueOff
+                });
+            }
+            controls.error.setStringValue(ns_string!(""));
+            let _ = controls.window.makeFirstResponder(Some(&controls.style));
+        }
+        NSApplication::sharedApplication(mtm).activate();
+        controls.window.makeKeyAndOrderFront(None);
+    }
+
+    fn save_settings(&self) {
+        let window = self.ivars().settings_window.borrow();
+        let Some(controls) = window.as_ref() else {
+            return;
+        };
+        let settings = Settings {
+            output_style: OutputStyle::ALL[controls.style.indexOfSelectedItem() as usize],
+            custom_style: controls.custom.string().to_string(),
+            reduce_motion: controls.reduce_motion.state() == NSControlStateValueOn,
+            all_spaces: controls.all_spaces.state() == NSControlStateValueOn,
+            keep_above: controls.keep_above.state() == NSControlStateValueOn,
+        };
+        if let Err(error) = settings.validate() {
+            controls
+                .error
+                .setStringValue(&NSString::from_str(&error.to_string()));
+            return;
+        }
+        *self.ivars().settings.borrow_mut() = settings;
+        self.persist_settings();
+        controls.window.orderOut(None);
+        self.on_tick();
     }
 
     fn set_backend(&self, backend: u8) {
@@ -970,7 +1383,14 @@ impl Delegate {
             if pending.is_some() || self.ivars().shared.in_flight.load(Ordering::SeqCst) {
                 return;
             }
-            *pending = Some((backend, generation, trimmed.to_string()));
+            let settings = self.ivars().settings.borrow();
+            *pending = Some(PendingChat {
+                backend,
+                generation,
+                message: trimmed.to_string(),
+                style: settings.output_style,
+                custom_style: settings.custom_style.clone(),
+            });
         }
         self.ivars().walk.borrow_mut().reply_expanded = false;
         field.setStringValue(ns_string!(""));
@@ -1028,6 +1448,8 @@ impl Delegate {
                 text.setString(&NSString::from_str(&presentation.full));
             }
         }
+        let reduce_motion = self.ivars().settings.borrow().reduce_motion
+            || NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
         let mut walk = self.ivars().walk.borrow_mut();
         if !walk.strip_on {
             drop(walk);
@@ -1039,7 +1461,7 @@ impl Delegate {
             - 16.0)
             .max(16.0);
         match mood {
-            _ if walk.bubble_on => {}
+            _ if walk.bubble_on || reduce_motion => {}
             Mood::Thinking | Mood::Asleep => {}
             _ => {
                 walk.x += walk.dir * motion.walk_speed;
@@ -1053,7 +1475,7 @@ impl Delegate {
             }
         }
         let bob = match mood {
-            _ if walk.bubble_on => 0.0,
+            _ if walk.bubble_on || reduce_motion => 0.0,
             Mood::Thinking => (walk.t * motion.thinking_bob_freq).sin() * motion.thinking_bob_amp,
             Mood::Talking => motion.talking_bob_offset,
             _ => ((walk.t * motion.idle_bob_freq).sin() * motion.idle_bob_amp).abs(),
@@ -1099,6 +1521,13 @@ impl Delegate {
         }
         if let Some(close) = self.ivars().close.borrow().as_ref() {
             close.setHidden(!bubble_on);
+        }
+        if let Some(style) = self.ivars().style_control.borrow().as_ref() {
+            style.setHidden(!bubble_on);
+            style.setEnabled(self.ivars().shared.backend.load(Ordering::Relaxed) == BACKEND_OLLAMA);
+        }
+        if let Some(settings) = self.ivars().settings_button.borrow().as_ref() {
+            settings.setHidden(!bubble_on);
         }
         if let Some(label) = self.ivars().backend_label.borrow().as_ref() {
             label.setHidden(!bubble_on);
@@ -1169,6 +1598,12 @@ impl Delegate {
         }
         if let Some(close) = self.ivars().close.borrow().as_ref() {
             close.setFrameOrigin(layout.close);
+        }
+        if let Some(style) = self.ivars().style_control.borrow().as_ref() {
+            style.setFrame(layout.style);
+        }
+        if let Some(settings) = self.ivars().settings_button.borrow().as_ref() {
+            settings.setFrameOrigin(layout.settings);
         }
         if let Some(label) = self.ivars().backend_label.borrow().as_ref() {
             label.setFrame(layout.backend);
@@ -1550,7 +1985,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                         }
                         msg
                     };
-                    if let Some((backend, generation, message)) = msg {
+                    if let Some(PendingChat { backend, generation, message, style, custom_style }) = msg {
                         if shared.backend.load(Ordering::SeqCst) != backend
                             || shared.guide.lock().unwrap().generation() != generation
                         {
@@ -1574,7 +2009,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             let result = ollama
                                 .as_ref()
                                 .ok_or(OllamaError::Unreachable)
-                                .and_then(|o| o.chat(&message));
+                                .and_then(|o| o.chat_with_style(&message, style, &custom_style));
                             if shared.backend.load(Ordering::SeqCst) != backend
                                 || shared.guide.lock().unwrap().generation() != generation
                             {
@@ -1872,6 +2307,12 @@ a+VhHbrWdvoCoROeKF3msYiqjFE=
                     assert!(layout.text_size.height > layout.bubble.size.height);
                     assert!(layout.button.y + metrics.see_more_h < layout.bubble.origin.y);
                     assert!(layout.input.origin.x + layout.input.size.width < layout.send.x);
+                    assert!(
+                        layout.backend.origin.x + layout.backend.size.width < layout.style.origin.x
+                    );
+                    assert!(layout.style.origin.x + layout.style.size.width < layout.settings.x);
+                    assert!(layout.settings.x + metrics.action_w < layout.button.x);
+                    assert!(layout.button.x + metrics.see_more_w < layout.close.x);
                     let without_bob = OverlayLayout::new(
                         screen,
                         x,

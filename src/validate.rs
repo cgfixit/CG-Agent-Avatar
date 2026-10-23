@@ -3,6 +3,7 @@
 use thiserror::Error;
 
 pub const MAX_MESSAGE_CHARS: usize = 32768;
+pub const MAX_OUTPUT_STYLE_CHARS: usize = 2048;
 pub const MAX_SESSION_ID: usize = 80;
 pub const MIN_SESSION_ID: usize = 1;
 
@@ -14,6 +15,8 @@ pub enum ValidateError {
     MessageTooLong,
     #[error("session id is empty or invalid")]
     SessionIdInvalid,
+    #[error("Custom style must contain 1–2,048 characters, with no control characters except tabs and newlines.")]
+    OutputStyleInvalid,
 }
 
 /// What to tell the user when `message` refuses their draft. Only a too-long
@@ -57,9 +60,43 @@ pub fn session_id(raw: &str) -> Result<&str, ValidateError> {
     Ok(raw)
 }
 
+pub fn output_style(raw: &str) -> Result<&str, ValidateError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || raw.chars().count() > MAX_OUTPUT_STYLE_CHARS
+        || raw
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err(ValidateError::OutputStyleInvalid);
+    }
+    Ok(trimmed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_output_style_boundaries() {
+        assert_eq!(
+            output_style("  Short replies.  ").unwrap(),
+            "Short replies."
+        );
+        assert!(output_style(&"é".repeat(MAX_OUTPUT_STYLE_CHARS)).is_ok());
+        for invalid in [
+            String::new(),
+            " \n ".into(),
+            "x\0y".into(),
+            "x\u{1b}y".into(),
+            "é".repeat(MAX_OUTPUT_STYLE_CHARS + 1),
+        ] {
+            assert_eq!(
+                output_style(&invalid),
+                Err(ValidateError::OutputStyleInvalid)
+            );
+        }
+    }
 
     #[test]
     fn message_objections() {

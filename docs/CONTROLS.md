@@ -9,6 +9,8 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message via `http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password (native secure text entry), then logs in for later Harness chats |
 | **Harness Password Reset…** | After logging in with a bootstrap password, securely replaces only that authenticated account's password |
+| **Style** in the toolbar / **Ollama Output Style** in the menu | Choose Default, Concise, Detailed, or Custom for the next Direct Ollama message |
+| **Settings…** in the toolbar or menu / **⌘,** while Avatar is active | Open the native settings window for output style and three macOS preferences |
 | **Quit CG-Agent-MacOS-Avatar** | Terminate |
 | Click the creature | Same as Talk |
 | Type, Return or **Send** | Send. Reply appears in the bubble **above** the avatar; while a request is busy, the next draft stays in the field |
@@ -28,7 +30,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
 The Send button is unavailable while a message is queued or being answered;
 you can keep typing the next draft. The panel identifies the selected backend.
-Direct Ollama sends only the current message plus the bundled system prompt,
+Direct Ollama sends only the current message plus the bundled system prompt and selected output style,
 and the results of one lookup when you ask for one. It asks for a direct answer
 with no hidden reasoning pass (`reasoning_effort: "none"`) and Qwen's published
 non-thinking sampling, so replies arrive sooner. Harness uses a server-side session. The input accepts up to 32,768 characters
@@ -46,7 +48,7 @@ last only for the running Avatar process.
 The creature roams while chat is closed. Opening chat holds the panel still so
 the field and reply do not move while you type, select text, or scroll. The panel
 fits within the screen's usable area, clear of the menu bar and Dock. Closing
-chat resumes the creature's movement. Empty overlay space passes clicks through
+chat resumes the creature's movement unless Reduce motion is enabled. Empty overlay space passes clicks through
 to the app underneath.
 
 Replies have padded text and a separate toolbar for **See More** / **See Less**
@@ -55,6 +57,31 @@ selectable plain text and scroll when longer than the available height. The
 preview caps at 400 characters and the expanded text at 8,000, with an ellipsis
 at the limit. Classic expansion caps at 420 points; Fable Protocol caps at 480,
 with a smaller viewport when screen space requires it.
+
+## Settings
+
+**Settings…** opens a 560 × 510-point native window. **Save** applies changes and
+remembers them on this Mac across launches. **Cancel**, Escape, or closing the
+window discards unsaved changes. Standard ⌘A, ⌘C, ⌘X, and ⌘V work in text fields.
+
+| General preference | Default | Effect |
+|---|---|---|
+| Reduce motion | Off | Stops roaming and bobbing. macOS Reduce Motion also stops them even when this checkbox is off. |
+| Show avatar on all Spaces | On | Keeps the avatar available across Spaces, including full-screen apps. Turn off to keep it on its current Space. |
+| Keep avatar above other windows | On | Keeps the companion visible over other windows. Turn off to let ordinary windows cover it. |
+
+Direct Ollama styles are **Default** (the existing Soul prompt), **Concise**
+(one to three short sentences), **Detailed** (explanations and examples), and
+**Custom** (your instructions). Style is a model preference, not a guaranteed
+format. A message keeps the style selected when you press Send. Harness uses its
+own style; its toolbar style selector is disabled.
+
+Choosing Custom without saved instructions opens Settings. Custom text accepts
+1–2,048 characters, excluding control characters other than tabs and newlines.
+Switching presets preserves saved custom text. Instructions remain in local
+macOS preferences and are sent to local Ollama only when Custom is selected;
+avoid putting secrets in them. They do not trigger web lookups or add tools.
+Output still uses plain text and the existing display limits.
 
 ## Web lookups (Direct Ollama)
 

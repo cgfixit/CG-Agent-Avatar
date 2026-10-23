@@ -117,6 +117,13 @@ fn ollama_web_lookups_stay_on_the_loopback_daemon() {
     let v = cg_agent::ollama::chat_body_json("hi");
     assert_eq!(v["messages"].as_array().map(Vec::len), Some(2));
     assert!(v.get("tools").is_none());
+    // Presentation preferences never replace the capability/lookup rules.
+    for style in cg_agent::settings::OutputStyle::ALL {
+        assert!(style
+            .system_prompt("Prefer short sentences.")
+            .unwrap()
+            .starts_with(cg_agent::ollama::SYSTEM_PROMPT));
+    }
     // Lookups happen only on an explicit request.
     use cg_agent::web_intent::{parse, Intent};
     assert_eq!(parse("what happened in the news today?"), Intent::Chat);

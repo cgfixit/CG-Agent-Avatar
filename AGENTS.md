@@ -81,7 +81,8 @@ layer that can hold it.
   Every entry is an exact path from the harness's `REGISTERED_PATHS`.
 - **`validate.rs`**: fail-closed outbound checks before any bytes leave the process:
   message ≤ 32,768 chars after trim with no NUL, and a session-ID charset and length
-  limit.
+  limit; custom output instructions are limited to 2,048 characters with control
+  characters rejected except tabs and newlines.
 - **`csrf.rs`**: extracts the console CSRF token from `GET /` HTML, validates its
   charset and length, and redacts it in `Debug` so it never reaches logs.
 - **`http.rs`**: bounded body reads (`MAX_BODY`, 1 MiB), shared by `client.rs`,
@@ -116,7 +117,8 @@ layer that can hold it.
   - The model tag is the constant `qwen3.8:27b-mlx`; `tags_ok` requires that
     exact tag, and a chat 404 with the tag absent becomes `ModelMissing`.
   - Each chat carries the bundled `resources/direct-ollama-system.md` as the
-    system message plus the current message: no history, no tools. It sends
+    system message with the selected output style, plus the current message:
+    no history, no tools. It sends
     `reasoning_effort: "none"` and Qwen's non-thinking sampling (temperature 0.7,
     top_p 0.8, presence_penalty 1.5), since Ollama's OpenAI route would otherwise
     think at "medium" and sample at 1.0. An explicit lookup phrase adds one search
@@ -133,6 +135,8 @@ layer that can hold it.
   Launch Services, never by path, spawned process, or arguments.
 
 **Layer 3: portable UI state (no AppKit)**
+- **`settings.rs`**: validated output-style preferences and macOS window choices.
+  `app.rs` persists them with `NSUserDefaults`; each queued message captures its style.
 - **`harness_setup.rs`**: typed Harness setup phases, advanced by a pinned loopback
   status response, login result, and required password change; generation checks
   discard results from earlier backend selections.
@@ -147,7 +151,7 @@ layer that can hold it.
 
 **Layer 4: AppKit (macOS only)**
 - **`app.rs`** (`#[cfg(target_os = "macos")]`): status item, menu, overlay, chat
-  field, and reply bubble. Network calls run on worker threads, never on the
+  field, reply bubble, and native Settings window. Network calls run on worker threads, never on the
   `NSApplication` run loop. Only this file converts `theme::Rgba` to `NSColor`.
 
 ## Hard rules (every agent)
