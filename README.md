@@ -13,6 +13,9 @@ resting, thinking, talking, or needs attention.
   conversation clear. **See More** opens a scrollable plain-text pane.
 - **Pick the engine.** Start with a local Ollama (the default) or connect to
   [CG-Agent-Harness](https://github.com/cgfixit/CG-Agent-Harness).
+- **Make it fit.** Choose Default, Concise, Detailed, or Custom output from the
+  Direct Ollama toolbar. **Settings…** controls motion, Spaces, and whether the
+  avatar stays above other windows. [Settings and controls](docs/CONTROLS.md#settings).
 - **Nothing leaves your Mac by accident.** Avatar talks only to loopback
   addresses, and Direct Ollama reaches the web only when you ask it to in so
   many words.
@@ -71,7 +74,7 @@ needed for the answer.
 
 | Backend | What you need | What Avatar does |
 |---|---|---|
-| **Direct Ollama** (default) | Ollama listening on `http://127.0.0.1:11434` with the exact model tag `qwen3.8:27b-mlx` pulled. Ollama has its own [macOS requirements](https://docs.ollama.com/macos), including macOS 14 or newer. | Sends the bundled [Soul prompt](resources/direct-ollama-system.md) plus your current message and asks for a direct answer without a hidden reasoning pass. It never installs models or sends previous turns. |
+| **Direct Ollama** (default) | Ollama listening on `http://127.0.0.1:11434` with the exact model tag `qwen3.8:27b-mlx` pulled. Ollama has its own [macOS requirements](https://docs.ollama.com/macos), including macOS 14 or newer. | Sends the bundled [Soul prompt](resources/direct-ollama-system.md), your selected output style, and current message; asks for a direct answer without a hidden reasoning pass. It never installs models or sends previous turns. |
 | **Harness** | The CG-Agent-Harness desktop app installed, or a headless `cgagentharness serve`. | Choose **Harness (127.0.0.1:8790)** from the menu. Avatar opens the installed desktop app, finds its listener, and reuses or creates a session titled `CG-Agent`. Harness manages its own model and conversation. |
 
 A responding Ollama does not guarantee the fixed model tag is available; the

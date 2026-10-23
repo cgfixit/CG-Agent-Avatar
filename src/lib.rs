@@ -13,6 +13,7 @@ pub mod mood;
 pub mod ollama;
 pub mod origin;
 pub mod paths;
+pub mod settings;
 pub mod theme;
 pub mod tls;
 pub mod validate;
