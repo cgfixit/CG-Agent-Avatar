@@ -139,7 +139,9 @@ layer that can hold it.
   `app.rs` persists them with `NSUserDefaults`; each queued message captures its style.
 - **`harness_setup.rs`**: typed Harness setup phases, advanced by a pinned loopback
   status response, login result, and required password change; generation checks
-  discard results from earlier backend selections.
+  discard results from earlier backend selections. A cloud selection is ready only
+  with its key and the account's consent (`model_status`); `describe` builds the
+  panel label that marks a cloud model.
 - **`mood.rs`**: pure `Mood` derivation (Asleep/Idle/Thinking/Talking/Sick) from
   backend status and in-flight chat state.
 - **`theme.rs`**: design tokens (layout, motion, color, type). `CLASSIC` is the

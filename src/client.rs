@@ -39,6 +39,8 @@ pub enum ClientError {
     Http { status: u16, code: String },
     #[error("chat is already running")]
     ChatBusy,
+    #[error("this cloud model needs your approval in Harness before it can chat")]
+    CloudConsentRequired,
     #[error("api key required — use the harness console")]
     KeyRequired,
     #[error("harness login required")]
@@ -78,6 +80,40 @@ pub struct Status {
     /// shape omits it even when accounts are on.
     #[serde(default)]
     pub auth_enabled: bool,
+    /// What Harness says about the selected model. Absent in the thin
+    /// pre-login shape and on older builds; any unexpected shape reads as
+    /// the default (a local model with nothing missing) rather than failing
+    /// the whole status check.
+    #[serde(default, deserialize_with = "lenient_model_status")]
+    pub model_status: ModelStatus,
+}
+
+/// The parts of Harness's `model_status` that decide whether a chat can run
+/// and whether it leaves this Mac (cg-agent-harness src/server/routes/core.rs
+/// `model_status`, src/llm/cloud_chat.rs `selection_status`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ModelStatus {
+    /// The selected model is a cloud provider's, not the local backend.
+    pub cloud: bool,
+    /// Cloud chat is turned off in Harness for this selection.
+    pub disabled: bool,
+    /// The cloud provider's key is not configured.
+    pub key_missing: bool,
+    /// This account has not yet approved sending chats to this provider.
+    pub consent_required: bool,
+}
+
+fn lenient_model_status<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ModelStatus, D::Error> {
+    let v = Value::deserialize(d)?;
+    let flag = |key: &str| v.get(key).and_then(Value::as_bool);
+    let cloud = flag("cloud") == Some(true);
+    Ok(ModelStatus {
+        cloud,
+        // Local selections report `key_present: null` and no `enabled`.
+        disabled: cloud && flag("enabled") == Some(false),
+        key_missing: cloud && flag("key_present") == Some(false),
+        consent_required: cloud && flag("consent_required") == Some(true),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -481,7 +517,7 @@ impl Client {
         let resp = self.post_json(paths::POST_CHAT, &body, CHAT_TIMEOUT)?;
         let status = resp.status().as_u16();
         if status == 409 {
-            return Err(ClientError::ChatBusy);
+            return Err(conflict(error_code(resp)));
         }
         if status == 401 {
             return Err(classify_unauthorized(resp));
@@ -589,6 +625,20 @@ fn forbidden(code: Option<String>) -> ClientError {
         _ => ClientError::Http {
             status: 403,
             code: code.unwrap_or_else(|| "FORBIDDEN".into()),
+        },
+    }
+}
+
+/// Harness uses 409 for more than a busy session: a cloud model the account
+/// has not approved, or one it cannot use, also answers 409. Only `CHAT_BUSY`
+/// (or a 409 with no code, as older builds sent) means "try again in a moment".
+fn conflict(code: Option<String>) -> ClientError {
+    match code.as_deref() {
+        None | Some("CHAT_BUSY") => ClientError::ChatBusy,
+        Some("CLOUD_CHAT_CONFIRM_REQUIRED") => ClientError::CloudConsentRequired,
+        Some(code) => ClientError::Http {
+            status: 409,
+            code: code.to_string(),
         },
     }
 }
@@ -983,6 +1033,90 @@ mod tests {
         let s = c.status().unwrap();
         assert!(s.model.is_empty());
         assert!(s.auth_enabled);
+    }
+
+    #[test]
+    fn conflict_is_busy_only_when_harness_says_so() {
+        for (body, expected) in [
+            (String::new(), "chat is already running"),
+            (harness_error("CHAT_BUSY"), "chat is already running"),
+            (
+                harness_error("CLOUD_CHAT_CONFIRM_REQUIRED"),
+                "this cloud model needs your approval in Harness before it can chat",
+            ),
+            (
+                harness_error("CLOUD_CHAT_BUDGET"),
+                "http 409: CLOUD_CHAT_BUDGET",
+            ),
+        ] {
+            let mut server = mockito::Server::new();
+            let _html = server.mock("GET", "/").with_body(html_ok()).create();
+            let _chat = server
+                .mock("POST", "/api/chat")
+                .with_status(409)
+                .with_body(&body)
+                .create();
+            let mut c = Client::new(origin_for(&server)).unwrap();
+            let shown = c.chat("abc", "hi").unwrap_err().to_string();
+            println!("409 {body:?} -> {shown}");
+            assert_eq!(shown, expected);
+        }
+    }
+
+    #[test]
+    fn status_reads_cloud_readiness_and_tolerates_odd_model_status() {
+        let cases = [
+            // Local model, as cg-agent-harness reports it.
+            (
+                r#"{"model":"qwen3.8:27b","provider":"ollama","cloud":false,"key_present":null}"#,
+                ModelStatus::default(),
+            ),
+            (
+                r#"{"model":"claude-opus-5-5","provider":"claude","cloud":true,"enabled":true,"key_present":true,"consent_required":false}"#,
+                ModelStatus {
+                    cloud: true,
+                    ..ModelStatus::default()
+                },
+            ),
+            (
+                r#"{"cloud":true,"enabled":false,"key_present":false,"consent_required":true}"#,
+                ModelStatus {
+                    cloud: true,
+                    disabled: true,
+                    key_missing: true,
+                    consent_required: true,
+                },
+            ),
+            // A shape this client does not know never fails the status check.
+            ("null", ModelStatus::default()),
+            (r#""soon""#, ModelStatus::default()),
+            (r#"{"cloud":"yes","key_present":0}"#, ModelStatus::default()),
+            // Local selections cannot be "missing a key" whatever they say.
+            (
+                r#"{"cloud":false,"key_present":false,"consent_required":true}"#,
+                ModelStatus::default(),
+            ),
+        ];
+        for (model_status, expected) in cases {
+            let mut server = mockito::Server::new();
+            let _m = server
+                .mock("GET", "/api/status")
+                .with_body(format!(
+                    r#"{{"model":"m","provider":"p","api_key_optional":true,"version":"0","model_status":{model_status}}}"#
+                ))
+                .create();
+            let status = Client::new(origin_for(&server)).unwrap().status().unwrap();
+            println!("model_status {model_status} -> {:?}", status.model_status);
+            assert_eq!(status.model_status, expected, "{model_status}");
+        }
+        // Older harness: the field is absent.
+        let mut server = mockito::Server::new();
+        let _m = server
+            .mock("GET", "/api/status")
+            .with_body(r#"{"model":"m","provider":"p","api_key_optional":true,"version":"0"}"#)
+            .create();
+        let status = Client::new(origin_for(&server)).unwrap().status().unwrap();
+        assert_eq!(status.model_status, ModelStatus::default());
     }
 
     #[test]

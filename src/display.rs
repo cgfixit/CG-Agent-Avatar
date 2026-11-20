@@ -11,6 +11,14 @@ pub fn expanded_text(raw: &str) -> String {
     sanitized_text(raw, MAX_EXPANDED_CHARS)
 }
 
+/// Backend-supplied text for a single-line label or tooltip: sanitized like a
+/// reply, with line breaks and tabs folded to spaces, clipped to `max_chars`
+/// (plus `…` when something was dropped).
+pub fn one_line(raw: &str, max_chars: usize) -> String {
+    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    sanitized_text(&flat, max_chars)
+}
+
 #[derive(Clone, Copy)]
 enum Esc {
     None,

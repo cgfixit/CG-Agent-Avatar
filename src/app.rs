@@ -28,7 +28,7 @@ use objc2_foundation::{
 use crate::client::{Client, ClientError, SessionJar, Status};
 use crate::discover;
 use crate::display;
-use crate::harness_setup::{Guide, Phase};
+use crate::harness_setup::{self, BackendDetail, Guide, Phase};
 use crate::home;
 use crate::mood::{self, Health, Mood};
 use crate::ollama::{self, Ollama, OllamaError};
@@ -59,6 +59,9 @@ struct Shared {
     click: AtomicBool,
     backend: AtomicU8,
     guide: Mutex<Guide>,
+    /// The confirmed Harness model, for the panel's backend label. `None`
+    /// until a status response names one, and after Harness goes away.
+    harness_detail: Mutex<Option<BackendDetail>>,
     /// One in-memory cookie jar for every harness client, so the status
     /// check sees the chat worker's login instead of the pre-login view.
     jar: Arc<SessionJar>,
@@ -1197,6 +1200,7 @@ impl Delegate {
         let shared = &self.ivars().shared;
         let harness_on = backend == BACKEND_HARNESS;
         shared.guide.lock().unwrap().select(harness_on);
+        *shared.harness_detail.lock().unwrap() = None;
         shared.backend.store(backend, Ordering::SeqCst);
         shared.in_flight.store(false, Ordering::SeqCst);
         shared.talking.store(false, Ordering::SeqCst);
@@ -1531,19 +1535,13 @@ impl Delegate {
         }
         if let Some(label) = self.ivars().backend_label.borrow().as_ref() {
             label.setHidden(!bubble_on);
-            let backend = if self.ivars().shared.backend.load(Ordering::Relaxed) == BACKEND_HARNESS
-            {
-                "Harness"
-            } else {
-                "Direct Ollama"
-            };
-            let label_text = if in_flight {
-                format!("{backend} · Thinking…")
-            } else {
-                backend.into()
-            };
+            let harness = self.ivars().shared.backend.load(Ordering::Relaxed) == BACKEND_HARNESS;
+            let detail = self.ivars().shared.harness_detail.lock().unwrap().clone();
+            let (label_text, tooltip) =
+                harness_setup::panel_label(harness, detail.as_ref(), in_flight);
             if label.stringValue().to_string() != label_text {
                 label.setStringValue(&NSString::from_str(&label_text));
+                label.setToolTip(Some(&NSString::from_str(&tooltip)));
             }
         }
         if let Some(button) = self.ivars().see_more.borrow().as_ref() {
@@ -1844,6 +1842,8 @@ fn spawn_workers(shared: Arc<Shared>) {
                             } else {
                                 let next = match probe {
                                     HarnessProbe::Confirmed(endpoint, status) => {
+                                        *shared.harness_detail.lock().unwrap() =
+                                            harness_setup::describe(&status);
                                         let changed =
                                             guide.observe(generation, Some((endpoint, &status)));
                                         if changed {
@@ -1861,6 +1861,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                         }
                                     }
                                     HarnessProbe::CertMismatch => {
+                                        *shared.harness_detail.lock().unwrap() = None;
                                         guide.observe(generation, None);
                                         *shared.last_reply.lock().unwrap() =
                                             "harness certificate changed — verify it, then re-check trust".into();
@@ -1868,6 +1869,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                     }
                                     HarnessProbe::RateLimited => health.clone(),
                                     HarnessProbe::Unavailable => {
+                                        *shared.harness_detail.lock().unwrap() = None;
                                         if guide.observe(generation, None) {
                                             *shared.last_reply.lock().unwrap() =
                                                 guide.phase().guidance().into();
@@ -2133,6 +2135,7 @@ pub fn run() {
         click: AtomicBool::new(false),
         backend: AtomicU8::new(DEFAULT_BACKEND),
         guide: Mutex::new(Guide::default()),
+        harness_detail: Mutex::new(None),
         jar: Arc::default(),
         repoll: AtomicBool::new(false),
     });
