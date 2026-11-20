@@ -42,6 +42,9 @@ pub const FORBIDDEN: &[&str] = &[
     // Chat and session mutation beyond one turn in one owned session.
     "/api/chat/cancel",
     "/api/chat/attachments",
+    // A streamed turn may ask its console to approve a model-composed link.
+    // The companion only displays that question; it can never answer it.
+    "/api/chat/fetch-confirm",
     "/api/sessions/clear",
     // Personality, memory, and key material.
     "/api/soul",
