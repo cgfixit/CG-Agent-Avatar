@@ -308,6 +308,19 @@ define_class!(
             }
         }
 
+        #[unsafe(method(openHarness:))]
+        fn open_harness_action(&self, _sender: Option<&AnyObject>) {
+            // Brings the Harness app forward without changing the backend or
+            // restarting setup, so a fix made there is picked up by the next
+            // status check.
+            if !crate::launch::launch_harness_app() {
+                *self.ivars().shared.last_reply.lock().unwrap() =
+                    "CG Agent Harness.app not found — install it, or use the console of your `cgagentharness serve`"
+                        .into();
+                self.open_talk();
+            }
+        }
+
         #[unsafe(method(useOllama:))]
         fn use_ollama_action(&self, _sender: Option<&AnyObject>) {
             self.set_backend(BACKEND_OLLAMA);
@@ -629,8 +642,10 @@ impl Delegate {
             ns_string!("Harness Password Reset…"),
             sel!(harnessPasswordReset:),
         );
+        let open_harness = Self::menu_item(mtm, ns_string!("Open Harness"), sel!(openHarness:));
         let quit = Self::menu_item(mtm, ns_string!("Quit CG-Agent-MacOS-Avatar"), sel!(quit:));
         unsafe {
+            open_harness.setTarget(Some(self.as_ref()));
             talk.setTarget(Some(self.as_ref()));
             harness.setTarget(Some(self.as_ref()));
             ollama.setTarget(Some(self.as_ref()));
@@ -646,6 +661,7 @@ impl Delegate {
         menu.addItem(&ollama);
         menu.addItem(&login);
         menu.addItem(&reset);
+        menu.addItem(&open_harness);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         let styles = Self::menu_item(mtm, ns_string!("Ollama Output Style"), sel!(openSettings:));
         let style_menu = NSMenu::new(mtm);
@@ -1224,8 +1240,8 @@ impl Delegate {
                 NSControlStateValueOn
             });
         }
-        let note = shared.guide.lock().unwrap().phase().guidance();
-        *self.ivars().shared.last_reply.lock().unwrap() = note.into();
+        let note = shared.guide.lock().unwrap().guidance();
+        *self.ivars().shared.last_reply.lock().unwrap() = note;
         self.open_talk();
     }
 
@@ -1238,8 +1254,8 @@ impl Delegate {
             (generation, guide.endpoint(generation))
         };
         if endpoint.is_none() {
-            let guidance = self.ivars().shared.guide.lock().unwrap().phase().guidance();
-            *self.ivars().shared.last_reply.lock().unwrap() = guidance.into();
+            let guidance = self.ivars().shared.guide.lock().unwrap().guidance();
+            *self.ivars().shared.last_reply.lock().unwrap() = guidance;
             self.open_talk();
             return;
         }
@@ -1264,7 +1280,7 @@ impl Delegate {
         let generation = {
             let guide = self.ivars().shared.guide.lock().unwrap();
             if !matches!(guide.phase(), Phase::Reset(_)) {
-                *self.ivars().shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                *self.ivars().shared.last_reply.lock().unwrap() = guide.guidance();
                 self.open_talk();
                 return;
             }
@@ -1378,7 +1394,7 @@ impl Delegate {
             let guide = self.ivars().shared.guide.lock().unwrap();
             let generation = guide.generation();
             if guide.ready_endpoint(generation).is_none() {
-                *self.ivars().shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                *self.ivars().shared.last_reply.lock().unwrap() = guide.guidance();
                 self.open_talk();
                 return;
             }
@@ -1889,7 +1905,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                             guide.observe(generation, Some((endpoint, &status)));
                                         if changed {
                                             *shared.last_reply.lock().unwrap() =
-                                                guide.phase().guidance().into();
+                                                guide.guidance();
                                         }
                                         if matches!(guide.phase(), Phase::Ready(_)) {
                                             Health::Ready {
@@ -1913,7 +1929,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                         *shared.harness_detail.lock().unwrap() = None;
                                         if guide.observe(generation, None) {
                                             *shared.last_reply.lock().unwrap() =
-                                                guide.phase().guidance().into();
+                                                guide.guidance();
                                         }
                                         Health::Asleep
                                     }
@@ -2006,7 +2022,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                             shared.repoll.store(true, Ordering::SeqCst);
                                         }
                                         *shared.last_reply.lock().unwrap() = if info.must_change_password {
-                                            guide.phase().guidance().into()
+                                            guide.guidance()
                                         } else {
                                             format!("logged in as {} — verifying Harness…", info.username)
                                         };
@@ -2040,7 +2056,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                         let endpoint = if backend == BACKEND_HARNESS {
                             let guide = shared.guide.lock().unwrap();
                             let Some(endpoint) = guide.ready_endpoint(generation) else {
-                                *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                *shared.last_reply.lock().unwrap() = guide.guidance();
                                 shared.in_flight.store(false, Ordering::SeqCst);
                                 continue;
                             };
@@ -2139,11 +2155,11 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 }
                                 Err(ClientError::LoginRequired) => {
                                     guide.auth_required(generation, false);
-                                    *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                    *shared.last_reply.lock().unwrap() = guide.guidance();
                                 }
                                 Err(ClientError::PasswordChangeRequired) => {
                                     guide.auth_required(generation, true);
-                                    *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                    *shared.last_reply.lock().unwrap() = guide.guidance();
                                 }
                                 Err(ClientError::CertMismatch) => {
                                     *shared.last_reply.lock().unwrap() =
