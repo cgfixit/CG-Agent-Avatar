@@ -204,6 +204,7 @@ style checks. Read the relevant one before touching networking, process spawning
 | `docs/CONTROLS.md` | menu items, bubble messages, themes, troubleshooting |
 | `docs/BUILD.md` | toolchain, local vs hosted checks, audit tool versions, packaging |
 | `SECURITY.md` | asset → threat → control table, discovery/TLS/Ollama rules, non-goals |
+| `docs/SPRITE-PLAN.md` | planned sprite frames and drawing changes (a plan, not shipped behavior) |
 | `AGENTS.md` | this file: agent rules, architecture, contract-test map, skills |
 | `CLAUDE.md` | Claude Code-only wiring (imports this file) |
 
