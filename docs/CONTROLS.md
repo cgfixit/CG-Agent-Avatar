@@ -22,14 +22,18 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness found, not logged in | Bubble says `Harness ready — use Harness Login… in the menu` |
 | Harness needs a password change | Bubble says `bootstrap password must be changed — use Harness Password Reset…` |
 | Harness model, provider, or key unavailable | Bubble asks you to configure them in Harness; Return leaves the typed text in the field |
+| Harness has a cloud model without a key, or with cloud chat off | Bubble says `Harness has a cloud model selected that it cannot use (key missing or cloud chat off) — fix that or pick a local model in Harness`; Return leaves the typed text in the field |
+| Harness has a cloud model you have not approved | Bubble says `Harness has a cloud model selected — approve cloud chat in Harness, or pick a local model there`; Return leaves the typed text in the field |
 | Harness status usable | Bubble says `Harness ready — type below, Return to send` |
+| Harness model confirmed | The panel label names it: `Harness · <model>` for a local model, `Harness · cloud · <model>` when messages leave this Mac. Hover for the provider. The name is clipped to 24 characters; while a reply is pending the label reads `Harness · cloud · Thinking…`, keeping the cloud marker |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Direct Ollama appends `[via web: searched "…"]` or `[via web: read host/path…]`, naming what was sent (clipped to 60 characters). Harness appends `[via web ×N]`, counting its own web tool calls. Avatar never fetches pages itself |
 
 Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
 The Send button is unavailable while a message is queued or being answered;
-you can keep typing the next draft. The panel identifies the selected backend.
+you can keep typing the next draft. The panel identifies the selected backend
+and, for Harness, the model it reports and whether that model is a cloud one.
 Direct Ollama sends only the current message plus the bundled system prompt and selected output style,
 and the results of one lookup when you ask for one. It asks for a direct answer
 with no hidden reasoning pass (`reasoning_effort: "none"`) and Qwen's published

@@ -160,7 +160,9 @@ For an account-gated home:
    before enabling chat.
 
 Configure missing models, providers, or keys in Harness, then wait for the next
-status check. Drafts stay in the field while setup is incomplete. Password Reset
+status check. Once Harness reports a model, the panel label names it and marks a
+cloud model (`Harness · cloud · …`), which sends your messages off this Mac; chat
+stays locked until that model has its key and your approval in Harness. Drafts stay in the field while setup is incomplete. Password Reset
 changes only the authenticated account; it is not forgotten-password recovery.
 Credentials and cookies stay in memory, so a restart needs another login.
 
