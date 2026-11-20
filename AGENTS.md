@@ -11,8 +11,9 @@ tool-specific notes at the end applies to every agent.
 in Rust. It targets Apple Silicon and macOS 13+. It is a **loopback-only client** of
 an already-running [CG-Agent-Harness](https://github.com/cgfixit/CG-Agent-Harness)
 and/or a local Ollama:
-- It never starts Ollama or a bare Harness process; selecting Harness launches or
-  activates the installed desktop app through Launch Services.
+- It never starts Ollama or a bare Harness process; selecting Harness, or choosing
+  Open Harness, launches or activates the installed desktop app through Launch
+  Services.
 - It never runs agent jobs or administers harness accounts.
 
 User-facing behavior is in `README.md`, and the threat model is in `SECURITY.md`.
