@@ -75,8 +75,8 @@ layer that can hold it.
   - `POST /api/sessions`, `/api/chat`, `/api/auth/login`, `/api/auth/password`.
 
   It also holds a documented `FORBIDDEN` list (agent run/jobs/runs/schedules, MCP
-  calls, config reload, model pull/select, chat cancel and attachments, session
-  clear, `web/*`, `memory/*`, structured-memory purge/gates, soul and soul
+  calls, config reload, model pull/select, chat cancel, attachments, and fetch
+  confirmation, session clear, `web/*`, `memory/*`, structured-memory purge/gates, soul and soul
   proposals, keys, logout, users, bootstrap password) that tests keep unreachable.
   Every entry is an exact path from the harness's `REGISTERED_PATHS`.
 - **`validate.rs`**: fail-closed outbound checks before any bytes leave the process:
@@ -95,7 +95,9 @@ layer that can hold it.
   every builder in `client.rs`, `ollama.rs`, and `discover.rs` calls
   `tls::ensure_crypto_provider()` first.
 - **`client.rs`**: the Harness `Client`. Guarded POSTs carry `X-CyClaw-CSRF`,
-  never send `"loop"`, and refuse redirects; it handles login and self
+  never send `"loop"`, and refuse redirects; `chat_stream` reads `POST /api/chat`
+  as server-sent events (same route, whole stream under `MAX_BODY` and the chat
+  timeout, no partial reply on a broken stream); it handles login and self
   password-change for `auth.enabled: true` homes and pins a TLS home's leaf cert.
 - **`home.rs`**: locates the harness home (default `~/.CGagentHarness`;
   `CGAGENTHARNESS_HOME` only as an absolute path with no `..`). It reads

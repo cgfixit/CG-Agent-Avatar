@@ -82,6 +82,21 @@ pub fn panel_label(
     (busy.to_string(), tooltip)
 }
 
+/// Shown while a streamed turn waits on Harness's link confirmation. Avatar
+/// has no route to answer it (`/api/chat/fetch-confirm` is not allowlisted),
+/// so say what will happen and how to get the read: name the link yourself.
+pub fn confirm_fetch_notice(origin: &str, wait_sec: u64) -> String {
+    let origin = display::one_line(origin, 80);
+    let site = if origin.is_empty() {
+        "a link".to_string()
+    } else {
+        format!("a link on {origin}")
+    };
+    format!(
+        "Harness wants to read {site} that the model wrote itself. Avatar cannot approve reads, so Harness will decline it within {wait_sec} seconds. To have it read, put the full link in your message."
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Off,
@@ -312,6 +327,16 @@ mod tests {
             // Login and password reset still reach the confirmed endpoint.
             assert_eq!(guide.endpoint(epoch), Some(endpoint));
         }
+    }
+
+    #[test]
+    fn confirm_fetch_notice_names_the_site_and_never_offers_approval() {
+        let notice = confirm_fetch_notice("https://example.com\u{1b}[2J\n", 120);
+        println!("{notice}");
+        assert!(notice.contains("a link on https://example.com that"));
+        assert!(notice.contains("within 120 seconds"));
+        assert!(!notice.contains('\u{1b}'));
+        assert!(confirm_fetch_notice("", 5).contains("read a link that"));
     }
 
     #[test]

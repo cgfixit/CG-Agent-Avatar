@@ -118,7 +118,8 @@ Illustrations with synthetic sample data, rendered from the app's theme tokens.
 
 Click the creature or choose **Talk** from its menu-bar menu. The panel stays in
 place while you type and read. **Return** or **Send** submits your message, and
-`…thinking` stays up until the reply arrives (replies are not streamed). You can
+`…thinking` stays up until the reply starts. Harness replies appear as they are
+written; Direct Ollama replies arrive whole. You can
 write a draft even when the backend is unavailable.
 
 ![Expanded native reply pane with a separate reply toolbar](docs/screenshots/expanded-reply.jpg)

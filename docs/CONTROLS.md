@@ -27,10 +27,15 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness status usable | Bubble says `Harness ready — type below, Return to send` |
 | Harness model confirmed | The panel label names it: `Harness · <model>` for a local model, `Harness · cloud · <model>` when messages leave this Mac. Hover for the provider. The name is clipped to 24 characters; while a reply is pending the label reads `Harness · cloud · Thinking…`, keeping the cloud marker |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
+| Harness asks to confirm a link | During a reply, the bubble says `Harness wants to read a link on <site> that the model wrote itself. Avatar cannot approve reads, so Harness will decline it within 120 seconds. To have it read, put the full link in your message.` Avatar never answers that question |
+| `Harness stopped before finishing that reply — send it again` | The reply stream ended, stalled past 12 minutes, or broke before Harness finished. Nothing partial is kept as the answer |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Direct Ollama appends `[via web: searched "…"]` or `[via web: read host/path…]`, naming what was sent (clipped to 60 characters). Harness appends `[via web ×N]`, counting its own web tool calls. Avatar never fetches pages itself |
 
-Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
+While a turn is in flight the bubble says `…thinking`. A Harness reply then
+appears as it is written and the creature talks while it arrives; the finished
+reply replaces the preview. Direct Ollama replies are not streamed. Choosing
+another backend mid-reply stops the Harness turn.
 The Send button is unavailable while a message is queued or being answered;
 you can keep typing the next draft. The panel identifies the selected backend
 and, for Harness, the model it reports and whether that model is a cloud one.
