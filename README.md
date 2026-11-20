@@ -118,7 +118,8 @@ Illustrations with synthetic sample data, rendered from the app's theme tokens.
 
 Click the creature or choose **Talk** from its menu-bar menu. The panel stays in
 place while you type and read. **Return** or **Send** submits your message, and
-`…thinking` stays up until the reply arrives (replies are not streamed). You can
+`…thinking` stays up until the reply starts. Harness replies appear as they are
+written; Direct Ollama replies arrive whole. You can
 write a draft even when the backend is unavailable.
 
 ![Expanded native reply pane with a separate reply toolbar](docs/screenshots/expanded-reply.jpg)
@@ -162,7 +163,8 @@ For an account-gated home:
 Configure missing models, providers, or keys in Harness, then wait for the next
 status check. Once Harness reports a model, the panel label names it and marks a
 cloud model (`Harness · cloud · …`), which sends your messages off this Mac; chat
-stays locked until that model has its key and your approval in Harness. Drafts stay in the field while setup is incomplete. Password Reset
+stays locked until that model has its key and your approval in Harness. The
+bubble names the step, and **Open Harness** in the menu brings Harness forward. Drafts stay in the field while setup is incomplete. Password Reset
 changes only the authenticated account; it is not forgotten-password recovery.
 Credentials and cookies stay in memory, so a restart needs another login.
 

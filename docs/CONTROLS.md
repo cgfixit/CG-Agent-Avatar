@@ -8,6 +8,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | **Harness (127.0.0.1:8790)** | Optional. Launches or activates the installed `CG Agent Harness.app` by bundle identifier, then checks the configured port and desktop sidecar for a confirmed status response; HTTPS with a pinned certificate on fresh homes, plain HTTP only on legacy homes with no `tls/server.pem` |
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message via `http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password (native secure text entry), then logs in for later Harness chats |
+| **Open Harness** | Brings the installed `CG Agent Harness.app` forward (launching it if needed) by bundle identifier, without changing the selected backend or restarting setup. Use it when the bubble sends you to Harness to fix something |
 | **Harness Password Reset…** | After logging in with a bootstrap password, securely replaces only that authenticated account's password |
 | **Style** in the toolbar / **Ollama Output Style** in the menu | Choose Default, Concise, Detailed, or Custom for the next Direct Ollama message |
 | **Settings…** in the toolbar or menu / **⌘,** while Avatar is active | Open the native settings window for output style and three macOS preferences |
@@ -22,15 +23,20 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness found, not logged in | Bubble says `Harness ready — use Harness Login… in the menu` |
 | Harness needs a password change | Bubble says `bootstrap password must be changed — use Harness Password Reset…` |
 | Harness model, provider, or key unavailable | Bubble asks you to configure them in Harness; Return leaves the typed text in the field |
-| Harness has a cloud model without a key, or with cloud chat off | Bubble says `Harness has a cloud model selected that it cannot use (key missing or cloud chat off) — fix that or pick a local model in Harness`; Return leaves the typed text in the field |
-| Harness has a cloud model you have not approved | Bubble says `Harness has a cloud model selected — approve cloud chat in Harness, or pick a local model there`; Return leaves the typed text in the field |
+| Harness has a cloud model without a key, or with cloud chat off | Bubble says `Harness cannot use its cloud model (<provider>): the key is missing or cloud chat is off. Choose Open Harness in the menu to fix that, or pick a local model there.` Return leaves the typed text in the field |
+| Harness has a cloud model you have not approved | Bubble says `Cloud chat with <provider> is not approved yet. Choose Open Harness in the menu, then confirm "/model use <provider>" there, or pick a local model.` Harness refuses these chats itself and only Harness can approve a provider, so Avatar cannot do it for you. The next status check (within 5 seconds) unlocks chat. Return leaves the typed text in the field |
 | Harness status usable | Bubble says `Harness ready — type below, Return to send` |
 | Harness model confirmed | The panel label names it: `Harness · <model>` for a local model, `Harness · cloud · <model>` when messages leave this Mac. Hover for the provider. The name is clipped to 24 characters; while a reply is pending the label reads `Harness · cloud · Thinking…`, keeping the cloud marker |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
+| Harness asks to confirm a link | During a reply, the bubble says `Harness wants to read a link on <site> that the model wrote itself. Avatar cannot approve reads, so Harness will decline it within 120 seconds. To have it read, put the full link in your message.` Avatar never answers that question |
+| `Harness stopped before finishing that reply — send it again` | The reply stream ended, stalled past 12 minutes, or broke before Harness finished. Nothing partial is kept as the answer |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Direct Ollama appends `[via web: searched "…"]` or `[via web: read host/path…]`, naming what was sent (clipped to 60 characters). Harness appends `[via web ×N]`, counting its own web tool calls. Avatar never fetches pages itself |
 
-Chat is not streaming. While a turn is in flight the bubble says `…thinking`.
+While a turn is in flight the bubble says `…thinking`. A Harness reply then
+appears as it is written and the creature talks while it arrives; the finished
+reply replaces the preview. Direct Ollama replies are not streamed. Choosing
+another backend mid-reply stops the Harness turn.
 The Send button is unavailable while a message is queued or being answered;
 you can keep typing the next draft. The panel identifies the selected backend
 and, for Harness, the model it reports and whether that model is a cloud one.

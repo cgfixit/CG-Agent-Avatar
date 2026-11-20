@@ -2,8 +2,9 @@
 //! Redirects are refused. Only allowlisted paths. No forwarding headers.
 
 use std::fmt;
+use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::csrf;
 use crate::http::{self, ReadError, MAX_BODY};
@@ -61,6 +62,30 @@ pub enum ClientError {
     SessionGone,
     #[error("harness is rate limiting requests")]
     RateLimited,
+    #[error("the reply stream stopped before Harness finished")]
+    StreamInterrupted,
+    #[error("stopped")]
+    Cancelled,
+}
+
+/// What a streamed chat reports while Harness is still working.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChatEvent<'a> {
+    /// The reply so far: every text delta received, joined. It is a preview;
+    /// the finished [`ChatReply`] is what Harness stored for the turn.
+    Text(&'a str),
+    /// Harness paused the turn to ask its console whether to read a link the
+    /// model composed. This client has no route to answer it, so the read is
+    /// declined when `wait_sec` runs out.
+    ConfirmFetch { origin: String, wait_sec: u64 },
+}
+
+/// Whether to keep reading a streamed chat. `Stop` drops the connection,
+/// which makes Harness abort the turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Continue,
+    Stop,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -294,6 +319,16 @@ impl Client {
         body: &T,
         timeout: Duration,
     ) -> Result<reqwest::blocking::Response, ClientError> {
+        self.post_json_accepting(path, body, timeout, None)
+    }
+
+    fn post_json_accepting<T: Serialize>(
+        &mut self,
+        path: &'static str,
+        body: &T,
+        timeout: Duration,
+        accept: Option<&'static str>,
+    ) -> Result<reqwest::blocking::Response, ClientError> {
         if !paths::is_allowed_post(path) {
             return Err(OriginError::PathNotAllowed.into());
         }
@@ -304,11 +339,15 @@ impl Client {
         for attempt in 0..2 {
             self.ensure_csrf()?;
             let token = self.csrf.clone().ok_or(ClientError::CsrfMissing)?;
-            let resp = self
+            let mut request = self
                 .http
                 .post(&url)
                 .timeout(timeout)
-                .header(CSRF_HEADER, token)
+                .header(CSRF_HEADER, token);
+            if let Some(accept) = accept {
+                request = request.header(reqwest::header::ACCEPT, accept);
+            }
+            let resp = request
                 .json(body)
                 .send()
                 .map_err(|e| classify_send_error(&e))?;
@@ -515,49 +554,199 @@ impl Client {
             .and_then(|v| v.get("loop").cloned())
             .is_none());
         let resp = self.post_json(paths::POST_CHAT, &body, CHAT_TIMEOUT)?;
-        let status = resp.status().as_u16();
-        if status == 409 {
-            return Err(conflict(error_code(resp)));
+        chat_reply(chat_json(resp)?, session_id)
+    }
+
+    /// One chat turn, read as it is written. Harness streams `POST /api/chat`
+    /// as server-sent events when asked with `Accept: text/event-stream`; the
+    /// route, body, CSRF header, and allowlist check are those of [`chat`].
+    /// `on_event` sees each step and may stop the turn. A Harness that
+    /// answers with plain JSON instead is read exactly like [`chat`].
+    ///
+    /// The whole stream counts against `MAX_BODY`, and the turn against
+    /// `CHAT_TIMEOUT`, so streaming never reads or waits longer than a
+    /// non-streamed reply could.
+    ///
+    /// [`chat`]: Client::chat
+    pub fn chat_stream(
+        &mut self,
+        session_id: &str,
+        message: &str,
+        on_event: &mut dyn FnMut(ChatEvent<'_>) -> Flow,
+    ) -> Result<ChatReply, ClientError> {
+        let session_id = validate::session_id(session_id)?;
+        let message = validate::message(message)?;
+        let body = ChatPost {
+            message,
+            session_id,
+        };
+        let deadline = Instant::now() + CHAT_TIMEOUT;
+        let resp =
+            self.post_json_accepting(paths::POST_CHAT, &body, CHAT_TIMEOUT, Some(EVENT_STREAM))?;
+        let streamed = resp.status().as_u16() == 200
+            && resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.trim_start().starts_with(EVENT_STREAM));
+        if !streamed {
+            return chat_reply(chat_json(resp)?, session_id);
         }
-        if status == 401 {
-            return Err(classify_unauthorized(resp));
-        }
-        if status == 404 {
-            // Unknown or foreign session, e.g. after the console cleared them.
-            return match map_http(resp) {
-                ClientError::Http { code, .. } if code == "HARNESS_SESSION_ERROR" => {
-                    Err(ClientError::SessionGone)
-                }
-                other => Err(other),
-            };
-        }
-        if status != 200 {
-            return Err(map_http(resp));
-        }
-        let v: Value = parse_json(resp)?;
-        let reply = v
-            .get("reply")
+        read_chat_stream(resp, session_id, deadline, on_event)
+    }
+}
+
+const EVENT_STREAM: &str = "text/event-stream";
+
+/// The JSON body of a finished chat response, or the error its status means.
+fn chat_json(resp: reqwest::blocking::Response) -> Result<Value, ClientError> {
+    let status = resp.status().as_u16();
+    if (300..400).contains(&status) {
+        return Err(ClientError::Redirect);
+    }
+    if status != 200 {
+        return Err(chat_error(status, error_code(resp)));
+    }
+    parse_json(resp)
+}
+
+/// What a failed chat turn means, from its HTTP status and Harness error
+/// code. Shared by the plain response and a streamed `error` event, so both
+/// report a busy session, a login prompt, or a cleared session the same way.
+fn chat_error(status: u16, code: Option<String>) -> ClientError {
+    match status {
+        409 => conflict(code),
+        401 => match code.as_deref() {
+            Some("AUTH_REQUIRED") => ClientError::LoginRequired,
+            _ => ClientError::KeyRequired,
+        },
+        403 => forbidden(code),
+        // Unknown or foreign session, e.g. after the console cleared them.
+        404 if code.as_deref() == Some("HARNESS_SESSION_ERROR") => ClientError::SessionGone,
+        429 => ClientError::RateLimited,
+        _ => ClientError::Http {
+            status,
+            code: code.unwrap_or_else(|| "HTTP".into()),
+        },
+    }
+}
+
+fn chat_reply(v: Value, session_id: &str) -> Result<ChatReply, ClientError> {
+    let reply = v
+        .get("reply")
+        .and_then(|s| s.as_str())
+        .ok_or(ClientError::Json)?;
+    let web_tools = v
+        .get("web_tools")
+        .and_then(|w| w.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(ChatReply {
+        session_id: v
+            .get("session_id")
             .and_then(|s| s.as_str())
-            .ok_or(ClientError::Json)?;
-        let web_tools = v
-            .get("web_tools")
-            .and_then(|w| w.as_array())
-            .cloned()
-            .unwrap_or_default();
-        Ok(ChatReply {
-            session_id: v
-                .get("session_id")
-                .and_then(|s| s.as_str())
-                .unwrap_or(session_id)
-                .to_string(),
-            reply: reply.to_string(),
-            model: v
-                .get("model")
-                .and_then(|s| s.as_str())
-                .unwrap_or("")
-                .to_string(),
-            web_tools,
-        })
+            .unwrap_or(session_id)
+            .to_string(),
+        reply: reply.to_string(),
+        model: v
+            .get("model")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        web_tools,
+    })
+}
+
+/// Reads Harness's chat event stream (cg-agent-harness
+/// src/server/routes/core.rs `chat`, src/llm/openai_stream.rs): `delta`
+/// events carry reply text, `confirm_fetch` a paused link read, and the
+/// stream ends with one `done` (the same JSON a plain reply has) or `error`.
+/// Unknown event types are skipped.
+///
+/// Fail closed: the reader stops at `MAX_BODY` bytes in total, so no single
+/// line and no sum of lines can exceed the cap every other response has; a
+/// stream that ends, stalls past `deadline`, or breaks before `done` is an
+/// error, never a partial reply passed off as complete.
+fn read_chat_stream(
+    reader: impl Read,
+    session_id: &str,
+    deadline: Instant,
+    on_event: &mut dyn FnMut(ChatEvent<'_>) -> Flow,
+) -> Result<ChatReply, ClientError> {
+    let mut reader = BufReader::new(reader.take(MAX_BODY + 1));
+    let mut read = 0u64;
+    let mut line = Vec::new();
+    let mut data = String::new();
+    let mut text = String::new();
+    loop {
+        line.clear();
+        let n = reader
+            .read_until(b'\n', &mut line)
+            .map_err(|_| ClientError::StreamInterrupted)?;
+        read += n as u64;
+        if read > MAX_BODY {
+            return Err(ClientError::ResponseTooLarge);
+        }
+        if n == 0 || Instant::now() >= deadline {
+            return Err(ClientError::StreamInterrupted);
+        }
+        let field = std::str::from_utf8(&line)
+            .map_err(|_| ClientError::Json)?
+            .trim_end_matches(['\n', '\r']);
+        if let Some(value) = field.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(value.strip_prefix(' ').unwrap_or(value));
+            continue;
+        }
+        // A blank line ends an event. Comments (keep-alives) and the other
+        // SSE fields carry nothing this client uses.
+        if !field.is_empty() || data.is_empty() {
+            continue;
+        }
+        let event: Value = serde_json::from_str(&data).map_err(|_| ClientError::Json)?;
+        data.clear();
+        let flow = match event.get("type").and_then(Value::as_str) {
+            Some("delta") => {
+                text.push_str(event.get("text").and_then(Value::as_str).unwrap_or(""));
+                on_event(ChatEvent::Text(&text))
+            }
+            Some("confirm_fetch") => on_event(ChatEvent::ConfirmFetch {
+                origin: event
+                    .get("origin")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .take(200)
+                    .collect(),
+                wait_sec: event.get("wait_sec").and_then(Value::as_u64).unwrap_or(0),
+            }),
+            Some("done") => {
+                return chat_reply(
+                    event.get("data").cloned().unwrap_or(Value::Null),
+                    session_id,
+                )
+            }
+            Some("error") => {
+                let status = event
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .and_then(|s| u16::try_from(s).ok())
+                    .unwrap_or(500);
+                let code = event
+                    .get("error")
+                    .and_then(|e| e.get("detail"))
+                    .and_then(|d| d.get("code"))
+                    .and_then(Value::as_str)
+                    .map(|c| c.chars().take(64).collect());
+                return Err(chat_error(status, code));
+            }
+            _ => Flow::Continue,
+        };
+        if flow == Flow::Stop {
+            return Err(ClientError::Cancelled);
+        }
     }
 }
 
@@ -1033,6 +1222,224 @@ mod tests {
         let s = c.status().unwrap();
         assert!(s.model.is_empty());
         assert!(s.auth_enabled);
+    }
+
+    fn sse(events: &[&str]) -> String {
+        events.iter().map(|e| format!("data: {e}\n\n")).collect()
+    }
+
+    fn collect_stream(
+        body: &[u8],
+        stop_after: usize,
+    ) -> (Vec<String>, Result<ChatReply, ClientError>) {
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let result = read_chat_stream(body, "abc", deadline, &mut |event| {
+            seen.push(match event {
+                ChatEvent::Text(text) => format!("text:{text}"),
+                ChatEvent::ConfirmFetch { origin, wait_sec } => {
+                    format!("confirm:{origin}:{wait_sec}")
+                }
+            });
+            if seen.len() >= stop_after {
+                Flow::Stop
+            } else {
+                Flow::Continue
+            }
+        });
+        (seen, result)
+    }
+
+    #[test]
+    fn streamed_chat_uses_the_chat_route_and_reports_text_as_it_arrives() {
+        let mut server = mockito::Server::new();
+        let _html = server.mock("GET", "/").with_body(html_ok()).create();
+        // Keep-alive comments, CRLF line ends, an event type this client does
+        // not know, and a `data:` field with no space are all valid SSE.
+        let body = format!(
+            ": keep-alive\n\n{}data:{{\"type\":\"delta\",\"text\":\"lo\"}}\r\n\r\nevent: note\ndata: {{\"type\":\"future\"}}\n\n{}",
+            sse(&[r#"{"type":"delta","text":"hel"}"#]),
+            sse(&[
+                r#"{"type":"confirm_fetch","id":"x","url":"https://example.com/a","origin":"https://example.com","wait_sec":120}"#,
+                r#"{"type":"done","data":{"session_id":"abc","reply":"hello there","model":"qwen","web_tools":[{"tool":"web_search"}]}}"#,
+            ])
+        );
+        let chat = server
+            .mock("POST", "/api/chat")
+            .match_header("accept", "text/event-stream")
+            .match_header("X-CyClaw-CSRF", "tok12345")
+            .match_body(mockito::Matcher::Json(chat_post_json("hi", "abc")))
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create();
+        let mut c = Client::new(origin_for(&server)).unwrap();
+        let mut seen = Vec::new();
+        let reply = c
+            .chat_stream("abc", "hi", &mut |event| {
+                seen.push(format!("{event:?}"));
+                Flow::Continue
+            })
+            .unwrap();
+        chat.assert();
+        println!(
+            "events: {seen:#?}\nfinal: {:?} via {} web tool(s)",
+            reply.reply,
+            reply.web_tools.len()
+        );
+        assert_eq!(
+            seen,
+            [
+                r#"Text("hel")"#,
+                r#"Text("hello")"#,
+                r#"ConfirmFetch { origin: "https://example.com", wait_sec: 120 }"#
+            ]
+        );
+        // The finished reply is Harness's own, not the joined previews.
+        assert_eq!(reply.reply, "hello there");
+        assert_eq!(reply.web_tools.len(), 1);
+    }
+
+    #[test]
+    fn streamed_chat_reads_a_plain_json_answer_like_chat() {
+        let mut server = mockito::Server::new();
+        let _html = server.mock("GET", "/").with_body(html_ok()).create();
+        let _chat = server
+            .mock("POST", "/api/chat")
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"session_id":"abc","reply":"hello","model":"qwen"}"#)
+            .create();
+        let mut c = Client::new(origin_for(&server)).unwrap();
+        let mut events = 0;
+        let reply = c
+            .chat_stream("abc", "hi", &mut |_| {
+                events += 1;
+                Flow::Continue
+            })
+            .unwrap();
+        assert_eq!((reply.reply.as_str(), events), ("hello", 0));
+        // Errors before the stream starts keep their meaning too.
+        let mut server = mockito::Server::new();
+        let _html = server.mock("GET", "/").with_body(html_ok()).create();
+        let _chat = server
+            .mock("POST", "/api/chat")
+            .with_status(409)
+            .with_body(harness_error("CHAT_BUSY"))
+            .create();
+        let mut c = Client::new(origin_for(&server)).unwrap();
+        assert!(matches!(
+            c.chat_stream("abc", "hi", &mut |_| Flow::Continue),
+            Err(ClientError::ChatBusy)
+        ));
+    }
+
+    #[test]
+    fn stream_error_events_mean_what_the_same_http_error_means() {
+        for (status, code, expected) in [
+            (409, "CHAT_BUSY", "chat is already running"),
+            (404, "HARNESS_SESSION_ERROR", "harness session is gone"),
+            (401, "AUTH_REQUIRED", "harness login required"),
+            (429, "RATE_LIMITED", "harness is rate limiting requests"),
+            (502, "LLM_UPSTREAM", "http 502: LLM_UPSTREAM"),
+        ] {
+            let body = sse(&[
+                r#"{"type":"delta","text":"par"}"#,
+                &format!(
+                    r#"{{"type":"error","status":{status},"error":{},"headers":{{}}}}"#,
+                    harness_error(code)
+                ),
+            ]);
+            let (seen, result) = collect_stream(body.as_bytes(), usize::MAX);
+            let shown = result.unwrap_err().to_string();
+            println!("error event {status} {code} -> {shown}");
+            assert_eq!((seen.len(), shown.as_str()), (1, expected));
+        }
+    }
+
+    #[test]
+    fn stream_fails_closed_when_cut_short_stopped_or_late() {
+        let partial = sse(&[
+            r#"{"type":"delta","text":"a"}"#,
+            r#"{"type":"delta","text":"b"}"#,
+        ]);
+        // Ended without `done`: never a partial reply passed off as complete.
+        let (seen, result) = collect_stream(partial.as_bytes(), usize::MAX);
+        assert_eq!(seen, ["text:a", "text:ab"]);
+        assert!(matches!(result, Err(ClientError::StreamInterrupted)));
+        // An event cut mid-line is not dispatched.
+        let (seen, result) = collect_stream(br#"data: {"type":"delta","te"#, usize::MAX);
+        assert!(seen.is_empty());
+        assert!(matches!(result, Err(ClientError::StreamInterrupted)));
+        // Stop ends the read at once; later events are never looked at.
+        let (seen, result) = collect_stream(partial.as_bytes(), 1);
+        assert_eq!(seen, ["text:a"]);
+        assert!(matches!(result, Err(ClientError::Cancelled)));
+        // Past the turn's deadline, even a complete stream is refused.
+        let done = sse(&[r#"{"type":"done","data":{"reply":"x"}}"#]);
+        let late = Instant::now() - Duration::from_secs(1);
+        assert!(matches!(
+            read_chat_stream(done.as_bytes(), "abc", late, &mut |_| Flow::Continue),
+            Err(ClientError::StreamInterrupted)
+        ));
+        for bad in [
+            "data: not json\n\n",
+            "data: {\"type\":\"done\",\"data\":{}}\n\n",
+        ] {
+            assert!(matches!(
+                collect_stream(bad.as_bytes(), usize::MAX).1,
+                Err(ClientError::Json)
+            ));
+        }
+    }
+
+    /// Endless input, counting what the reader actually pulled.
+    struct Endless<'a> {
+        chunk: &'a [u8],
+        at: usize,
+        pulled: &'a std::cell::Cell<u64>,
+    }
+
+    impl Read for Endless<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.chunk.len() - self.at);
+            buf[..n].copy_from_slice(&self.chunk[self.at..self.at + n]);
+            self.at = (self.at + n) % self.chunk.len();
+            self.pulled.set(self.pulled.get() + n as u64);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn stream_never_reads_past_the_response_cap() {
+        let delta = sse(&[r#"{"type":"delta","text":"xxxxxxxx"}"#]);
+        // Many small events, then one line that never ends.
+        for chunk in [delta.as_bytes(), &b"data: aaaaaaaaaaaaaaaa"[..]] {
+            let pulled = std::cell::Cell::new(0);
+            let mut longest = 0;
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let result = read_chat_stream(
+                Endless {
+                    chunk,
+                    at: 0,
+                    pulled: &pulled,
+                },
+                "abc",
+                deadline,
+                &mut |event| {
+                    if let ChatEvent::Text(text) = event {
+                        longest = longest.max(text.len());
+                    }
+                    Flow::Continue
+                },
+            );
+            println!(
+                "endless stream: {:?} after {} bytes pulled (cap {MAX_BODY}), longest preview {longest}",
+                result.as_ref().unwrap_err(),
+                pulled.get()
+            );
+            assert!(matches!(result, Err(ClientError::ResponseTooLarge)));
+            assert_eq!(pulled.get(), MAX_BODY + 1);
+            assert!((longest as u64) < MAX_BODY);
+        }
     }
 
     #[test]

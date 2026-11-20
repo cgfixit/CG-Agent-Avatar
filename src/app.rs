@@ -25,7 +25,7 @@ use objc2_foundation::{
     NSRect, NSSize, NSString, NSTimer, NSUserDefaults,
 };
 
-use crate::client::{Client, ClientError, SessionJar, Status};
+use crate::client::{ChatEvent, Client, ClientError, Flow, SessionJar, Status};
 use crate::discover;
 use crate::display;
 use crate::harness_setup::{self, BackendDetail, Guide, Phase};
@@ -55,6 +55,9 @@ struct Shared {
     pending_login: Mutex<Option<(u64, String, String)>>,
     pending_password_change: Mutex<Option<(u64, String, String)>>,
     in_flight: AtomicBool,
+    /// A pending Harness reply has text to show, so `last_reply` holds the
+    /// reply so far instead of the previous answer.
+    streaming: AtomicBool,
     talking: AtomicBool,
     click: AtomicBool,
     backend: AtomicU8,
@@ -302,6 +305,19 @@ define_class!(
                 *self.ivars().shared.last_reply.lock().unwrap() =
                     "CG Agent Harness.app not found — install it, or run `cgagentharness serve`"
                         .into();
+            }
+        }
+
+        #[unsafe(method(openHarness:))]
+        fn open_harness_action(&self, _sender: Option<&AnyObject>) {
+            // Brings the Harness app forward without changing the backend or
+            // restarting setup, so a fix made there is picked up by the next
+            // status check.
+            if !crate::launch::launch_harness_app() {
+                *self.ivars().shared.last_reply.lock().unwrap() =
+                    "CG Agent Harness.app not found — install it, or use the console of your `cgagentharness serve`"
+                        .into();
+                self.open_talk();
             }
         }
 
@@ -626,8 +642,10 @@ impl Delegate {
             ns_string!("Harness Password Reset…"),
             sel!(harnessPasswordReset:),
         );
+        let open_harness = Self::menu_item(mtm, ns_string!("Open Harness"), sel!(openHarness:));
         let quit = Self::menu_item(mtm, ns_string!("Quit CG-Agent-MacOS-Avatar"), sel!(quit:));
         unsafe {
+            open_harness.setTarget(Some(self.as_ref()));
             talk.setTarget(Some(self.as_ref()));
             harness.setTarget(Some(self.as_ref()));
             ollama.setTarget(Some(self.as_ref()));
@@ -643,6 +661,7 @@ impl Delegate {
         menu.addItem(&ollama);
         menu.addItem(&login);
         menu.addItem(&reset);
+        menu.addItem(&open_harness);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         let styles = Self::menu_item(mtm, ns_string!("Ollama Output Style"), sel!(openSettings:));
         let style_menu = NSMenu::new(mtm);
@@ -1203,6 +1222,7 @@ impl Delegate {
         *shared.harness_detail.lock().unwrap() = None;
         shared.backend.store(backend, Ordering::SeqCst);
         shared.in_flight.store(false, Ordering::SeqCst);
+        shared.streaming.store(false, Ordering::SeqCst);
         shared.talking.store(false, Ordering::SeqCst);
         shared.repoll.store(true, Ordering::SeqCst);
         self.ivars().walk.borrow_mut().reply_expanded = false;
@@ -1220,8 +1240,8 @@ impl Delegate {
                 NSControlStateValueOn
             });
         }
-        let note = shared.guide.lock().unwrap().phase().guidance();
-        *self.ivars().shared.last_reply.lock().unwrap() = note.into();
+        let note = shared.guide.lock().unwrap().guidance();
+        *self.ivars().shared.last_reply.lock().unwrap() = note;
         self.open_talk();
     }
 
@@ -1234,8 +1254,8 @@ impl Delegate {
             (generation, guide.endpoint(generation))
         };
         if endpoint.is_none() {
-            let guidance = self.ivars().shared.guide.lock().unwrap().phase().guidance();
-            *self.ivars().shared.last_reply.lock().unwrap() = guidance.into();
+            let guidance = self.ivars().shared.guide.lock().unwrap().guidance();
+            *self.ivars().shared.last_reply.lock().unwrap() = guidance;
             self.open_talk();
             return;
         }
@@ -1260,7 +1280,7 @@ impl Delegate {
         let generation = {
             let guide = self.ivars().shared.guide.lock().unwrap();
             if !matches!(guide.phase(), Phase::Reset(_)) {
-                *self.ivars().shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                *self.ivars().shared.last_reply.lock().unwrap() = guide.guidance();
                 self.open_talk();
                 return;
             }
@@ -1374,7 +1394,7 @@ impl Delegate {
             let guide = self.ivars().shared.guide.lock().unwrap();
             let generation = guide.generation();
             if guide.ready_endpoint(generation).is_none() {
-                *self.ivars().shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                *self.ivars().shared.last_reply.lock().unwrap() = guide.guidance();
                 self.open_talk();
                 return;
             }
@@ -1438,9 +1458,11 @@ impl Delegate {
             pending.is_some() || self.ivars().shared.in_flight.load(Ordering::SeqCst)
         };
         let mut presentation = self.ivars().reply_presentation.borrow_mut();
+        // Once a streamed reply has text, show it instead of "…thinking".
+        let thinking = in_flight && !self.ivars().shared.streaming.load(Ordering::SeqCst);
         let text_changed = presentation.update(
             &self.ivars().shared.last_reply.lock().unwrap(),
-            in_flight,
+            thinking,
             &active.metrics,
         );
         let (reply_height, text_height) = presentation.heights;
@@ -1801,6 +1823,41 @@ fn expanded_reply_heights(text: &str, metrics: &theme::Metrics) -> (f64, f64) {
     (full.min(MAX_EXPANDED_REPLY_H), full)
 }
 
+/// How often a streamed reply is copied into the bubble. The reply so far is
+/// re-rendered whole, so every delta would be wasted work.
+const STREAM_REDRAW: Duration = Duration::from_millis(60);
+
+/// Shows one step of a streamed Harness reply, unless the user has since
+/// picked another backend: then the turn is stopped, which closes the
+/// connection and makes Harness abort it. The backend selection is checked
+/// and the bubble written under the guide lock, so a late event can never
+/// overwrite the note a new selection just put there.
+fn stream_event(
+    shared: &Shared,
+    backend: u8,
+    generation: u64,
+    shown: &mut Option<Instant>,
+    event: ChatEvent<'_>,
+) -> Flow {
+    let guide = shared.guide.lock().unwrap();
+    if shared.backend.load(Ordering::SeqCst) != backend || !guide.current(generation) {
+        return Flow::Stop;
+    }
+    let text = match event {
+        ChatEvent::Text(_) if shown.is_some_and(|at| at.elapsed() < STREAM_REDRAW) => {
+            return Flow::Continue
+        }
+        ChatEvent::Text(text) => text.to_string(),
+        ChatEvent::ConfirmFetch { origin, wait_sec } => {
+            harness_setup::confirm_fetch_notice(&origin, wait_sec)
+        }
+    };
+    *shown = Some(Instant::now());
+    *shared.last_reply.lock().unwrap() = text;
+    shared.streaming.store(true, Ordering::SeqCst);
+    Flow::Continue
+}
+
 // ponytail: auth waits delay expiry; use the status worker if strict timing is needed.
 fn expire_talking(deadline: &mut Option<Instant>, talking: &AtomicBool, now: Instant) {
     if deadline.is_some_and(|at| now >= at) {
@@ -1848,7 +1905,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                             guide.observe(generation, Some((endpoint, &status)));
                                         if changed {
                                             *shared.last_reply.lock().unwrap() =
-                                                guide.phase().guidance().into();
+                                                guide.guidance();
                                         }
                                         if matches!(guide.phase(), Phase::Ready(_)) {
                                             Health::Ready {
@@ -1872,7 +1929,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                         *shared.harness_detail.lock().unwrap() = None;
                                         if guide.observe(generation, None) {
                                             *shared.last_reply.lock().unwrap() =
-                                                guide.phase().guidance().into();
+                                                guide.guidance();
                                         }
                                         Health::Asleep
                                     }
@@ -1882,9 +1939,11 @@ fn spawn_workers(shared: Arc<Shared>) {
                         };
                         polled = Some((backend, Instant::now()));
                     }
+                    // The creature talks while a streamed reply is arriving.
+                    let streaming = shared.streaming.load(Ordering::Relaxed);
                     let input = health.input(
-                        shared.in_flight.load(Ordering::Relaxed),
-                        shared.talking.load(Ordering::Relaxed),
+                        shared.in_flight.load(Ordering::Relaxed) && !streaming,
+                        shared.talking.load(Ordering::Relaxed) || streaming,
                     );
                     *shared.mood.lock().unwrap_or_else(PoisonError::into_inner) = mood::mood(input);
                     std::thread::sleep(MOOD_EVERY);
@@ -1963,7 +2022,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                             shared.repoll.store(true, Ordering::SeqCst);
                                         }
                                         *shared.last_reply.lock().unwrap() = if info.must_change_password {
-                                            guide.phase().guidance().into()
+                                            guide.guidance()
                                         } else {
                                             format!("logged in as {} — verifying Harness…", info.username)
                                         };
@@ -1997,7 +2056,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                         let endpoint = if backend == BACKEND_HARNESS {
                             let guide = shared.guide.lock().unwrap();
                             let Some(endpoint) = guide.ready_endpoint(generation) else {
-                                *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                *shared.last_reply.lock().unwrap() = guide.guidance();
                                 shared.in_flight.store(false, Ordering::SeqCst);
                                 continue;
                             };
@@ -2048,12 +2107,16 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 if session.is_none() {
                                     session = Some(client.ensure_session()?);
                                 }
-                                match client.chat(session.as_deref().unwrap(), &message) {
+                                let mut shown = None::<Instant>;
+                                let mut on_event = |event: ChatEvent<'_>| {
+                                    stream_event(&shared, backend, generation, &mut shown, event)
+                                };
+                                match client.chat_stream(session.as_deref().unwrap(), &message, &mut on_event) {
                                     // Cleared in the console or owned by another
                                     // account now: pick up (or create) ours, once.
                                     Err(ClientError::SessionGone) => {
                                         let id = session.insert(client.ensure_session()?);
-                                        client.chat(id, &message)
+                                        client.chat_stream(id, &message, &mut on_event)
                                     }
                                     other => other,
                                 }
@@ -2069,6 +2132,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             let mut guide = shared.guide.lock().unwrap();
                             if !guide.current(generation) {
                                 shared.in_flight.store(false, Ordering::SeqCst);
+                                shared.streaming.store(false, Ordering::SeqCst);
                                 continue;
                             }
                             match result {
@@ -2091,11 +2155,11 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 }
                                 Err(ClientError::LoginRequired) => {
                                     guide.auth_required(generation, false);
-                                    *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                    *shared.last_reply.lock().unwrap() = guide.guidance();
                                 }
                                 Err(ClientError::PasswordChangeRequired) => {
                                     guide.auth_required(generation, true);
-                                    *shared.last_reply.lock().unwrap() = guide.phase().guidance().into();
+                                    *shared.last_reply.lock().unwrap() = guide.guidance();
                                 }
                                 Err(ClientError::CertMismatch) => {
                                     *shared.last_reply.lock().unwrap() =
@@ -2108,12 +2172,19 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 Err(ClientError::Unreachable) => {
                                     *shared.last_reply.lock().unwrap() = "harness asleep".into();
                                 }
+                                Err(ClientError::StreamInterrupted) => {
+                                    *shared.last_reply.lock().unwrap() =
+                                        "Harness stopped before finishing that reply — send it again".into();
+                                }
                                 Err(e) => {
                                     *shared.last_reply.lock().unwrap() = format!("harness error: {e}");
                                 }
                             }
                         }
+                        // Busy ends first: while it is set, clearing `streaming`
+                        // would flash "…thinking" over the finished reply.
                         shared.in_flight.store(false, Ordering::SeqCst);
+                        shared.streaming.store(false, Ordering::SeqCst);
                     } else {
                         std::thread::sleep(Duration::from_millis(80));
                     }
@@ -2131,6 +2202,7 @@ pub fn run() {
         pending_login: Mutex::new(None),
         pending_password_change: Mutex::new(None),
         in_flight: AtomicBool::new(false),
+        streaming: AtomicBool::new(false),
         talking: AtomicBool::new(false),
         click: AtomicBool::new(false),
         backend: AtomicU8::new(DEFAULT_BACKEND),
