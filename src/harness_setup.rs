@@ -371,55 +371,6 @@ mod tests {
     }
 
     #[test]
-    fn cloud_guidance_names_the_provider_and_the_way_out() {
-        let mut guide = Guide::default();
-        guide.select(true);
-        let epoch = guide.generation();
-        let endpoint = Reachable::Https(8790);
-        assert!(guide.observe(epoch, Some((endpoint, &cloud(false, false, true)))));
-        assert_eq!(
-            guide.guidance(),
-            "Cloud chat with claude is not approved yet. Choose Open Harness in the menu, then confirm \"/model use claude\" there, or pick a local model."
-        );
-        // Same phase, same provider: nothing new to say.
-        assert!(!guide.observe(epoch, Some((endpoint, &cloud(false, false, true)))));
-        // Same phase, another provider: the bubble must be rewritten.
-        let grok = Status {
-            provider: "grok".into(),
-            ..cloud(false, false, true)
-        };
-        assert!(guide.observe(epoch, Some((endpoint, &grok))));
-        assert!(guide.guidance().contains("\"/model use grok\""));
-        assert!(guide.observe(epoch, Some((endpoint, &cloud(false, true, false)))));
-        assert!(guide
-            .guidance()
-            .starts_with("Harness cannot use its cloud model (claude)"));
-        // A provider name that is not a plain token is never quoted as a
-        // command: the guidance falls back to the generic wording.
-        for odd in [
-            format!("\u{1b}[31mx\ny{}", "z".repeat(100)),
-            "two words".to_string(),
-            "z".repeat(33),
-        ] {
-            let hostile = Status {
-                provider: odd,
-                ..cloud(false, false, true)
-            };
-            guide.observe(epoch, Some((endpoint, &hostile)));
-            assert_eq!(
-                guide.guidance(),
-                "Cloud chat is not approved yet. Choose Open Harness in the menu and approve the cloud model there, or pick a local model."
-            );
-        }
-        // Leaving the cloud phase, or the backend, forgets the provider.
-        guide.observe(epoch, Some((endpoint, &cloud(false, false, false))));
-        assert_eq!(guide.guidance(), Phase::Ready(endpoint).guidance());
-        guide.observe(epoch, Some((endpoint, &grok)));
-        guide.select(true);
-        assert_eq!(guide.guidance(), Phase::Waiting.guidance());
-    }
-
-    #[test]
     fn label_marks_cloud_before_the_model_and_sanitizes_names() {
         assert_eq!(describe(&status("", "", true, true)), None);
         let local = describe(&status("qwen3.8:27b", "ollama", true, false)).unwrap();
@@ -499,5 +450,54 @@ mod tests {
         assert_eq!(guide.ready_endpoint(epoch), Some(endpoint));
         guide.observe(epoch, None);
         assert_eq!(guide.ready_endpoint(epoch), None);
+    }
+
+    #[test]
+    fn cloud_guidance_names_the_provider_and_the_way_out() {
+        let mut guide = Guide::default();
+        guide.select(true);
+        let epoch = guide.generation();
+        let endpoint = Reachable::Https(8790);
+        assert!(guide.observe(epoch, Some((endpoint, &cloud(false, false, true)))));
+        assert_eq!(
+            guide.guidance(),
+            "Cloud chat with claude is not approved yet. Choose Open Harness in the menu, then confirm \"/model use claude\" there, or pick a local model."
+        );
+        // Same phase, same provider: nothing new to say.
+        assert!(!guide.observe(epoch, Some((endpoint, &cloud(false, false, true)))));
+        // Same phase, another provider: the bubble must be rewritten.
+        let grok = Status {
+            provider: "grok".into(),
+            ..cloud(false, false, true)
+        };
+        assert!(guide.observe(epoch, Some((endpoint, &grok))));
+        assert!(guide.guidance().contains("\"/model use grok\""));
+        assert!(guide.observe(epoch, Some((endpoint, &cloud(false, true, false)))));
+        assert!(guide
+            .guidance()
+            .starts_with("Harness cannot use its cloud model (claude)"));
+        // A provider name that is not a plain token is never quoted as a
+        // command: the guidance falls back to the generic wording.
+        for odd in [
+            format!("\u{1b}[31mx\ny{}", "z".repeat(100)),
+            "two words".to_string(),
+            "z".repeat(33),
+        ] {
+            let hostile = Status {
+                provider: odd,
+                ..cloud(false, false, true)
+            };
+            guide.observe(epoch, Some((endpoint, &hostile)));
+            assert_eq!(
+                guide.guidance(),
+                "Cloud chat is not approved yet. Choose Open Harness in the menu and approve the cloud model there, or pick a local model."
+            );
+        }
+        // Leaving the cloud phase, or the backend, forgets the provider.
+        guide.observe(epoch, Some((endpoint, &cloud(false, false, false))));
+        assert_eq!(guide.guidance(), Phase::Ready(endpoint).guidance());
+        guide.observe(epoch, Some((endpoint, &grok)));
+        guide.select(true);
+        assert_eq!(guide.guidance(), Phase::Waiting.guidance());
     }
 }
