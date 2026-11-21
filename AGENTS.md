@@ -152,7 +152,9 @@ layer that can hold it.
   (or `fable`).
 - **`display.rs`**: treats model output as untrusted text. It strips C0/ANSI and
   bidi controls, and caps the bubble at 400 chars and the expanded view at 8,000.
-  It never renders HTML and never opens URLs.
+  It never renders HTML and never opens URLs. `copyable_reply` is the only text
+  **Copy Reply** writes to the pasteboard: the finished answer on screen,
+  sanitized the same way but uncapped.
 
 **Layer 4: AppKit (macOS only)**
 - **`app.rs`** (`#[cfg(target_os = "macos")]`): status item, menu, overlay, chat
@@ -190,7 +192,7 @@ style checks. Read the relevant one before touching networking, process spawning
 
 | File | Locks down |
 |---|---|
-| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only; web lookups only via the loopback daemon (no cloud host, key, or tools) |
+| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only; web lookups only via the loopback daemon (no cloud host, key, or tools); the pasteboard is written once, host-only, sanitized, and never read |
 | `tests/objections.rs` | SSRF baits rejected, CSRF injection shapes, session IDs shaped like paths, oversized bodies, token redaction in `Debug` |
 | `tests/lsof_argv.rs` | argv-only loopback `lsof`; Ollama and privileged ports skipped |
 | `tests/plist_contract.rs` | bundle identity key/value pairs, `LSUIElement` true (no Dock), ATS local networking true, macOS 13+ and Retina declarations |

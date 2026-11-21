@@ -11,6 +11,9 @@ resting, thinking, talking, or needs attention.
   **Send**, and close it without losing your draft or the reply.
 - **Room to read.** Padded replies, larger text, and a separate toolbar keep the
   conversation clear. **See More** opens a scrollable plain-text pane.
+- **Take the answer with you.** **Copy Reply** (⇧⌘C) copies the whole reply as
+  plain text, even past the 8,000-character view, with hidden control
+  characters removed so a paste into a terminal is exactly what you read.
 - **Pick the engine.** Start with a local Ollama (the default) or connect to
   [CG-Agent-Harness](https://github.com/cgfixit/CG-Agent-Harness).
 - **Make it fit.** Choose Default, Concise, Detailed, or Custom output from the
@@ -111,7 +114,7 @@ Illustrations with synthetic sample data, rendered from the app's theme tokens.
 | | |
 |---|---|
 | ![Thinking state](screenshots/thinking.png) **Thinking.** The panel names the backend, Send waits, and the draft field stays free. | ![Expanded reply](screenshots/expanded.png) **See More.** A long reply opens in a scrollable plain-text pane. |
-| ![Fable Protocol theme](screenshots/fable.png) **Fable Protocol theme** (`CG_AGENT_THEME=fable-protocol`). | ![Menu-bar menu](screenshots/menu.png) **Menu-bar menu.** Pick Direct Ollama or Harness; Harness login lives here. |
+| ![Fable Protocol theme](screenshots/fable.png) **Fable Protocol theme** (`CG_AGENT_THEME=fable-protocol`). | ![Menu-bar menu](screenshots/menu.png) **Menu-bar menu.** Copy Reply, the backend choice, Harness login, and Settings live here. |
 | ![Oversized draft notice](screenshots/notice.png) **Oversized draft.** A clear notice instead of a silent no-op; the draft stays put. | |
 
 ## Talk, read, carry on
@@ -132,6 +135,15 @@ overlay space passes clicks through to the application underneath.
 Both backends share the renderer: previews show up to 400 characters and expanded
 replies up to 8,000, with an ellipsis at the limit. Input accepts 32,768 characters
 after trimming, which is a character limit, not a model-context guarantee.
+
+**Copy Reply** in the menu-bar menu, or **⇧⌘C** while the chat panel is active,
+puts the finished reply on the clipboard: all of it, not just the 8,000 characters
+the pane shows, and stripped of the same terminal escapes, bidi overrides, and
+other invisible controls the bubble hides. Tabs and line breaks stay, so code
+keeps its indentation, and any `[via web: …]` note stays with the text. It is
+unavailable while a reply is pending or when the bubble shows a status message
+instead of an answer. The copy stays on this Mac (Universal Clipboard does not
+sync it), and Avatar never reads the clipboard.
 
 Classic pairs dark text with a translucent white surface. The optional Fable
 Protocol theme uses warm text on a dark surface and a calmer gait.

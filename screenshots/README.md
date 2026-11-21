@@ -14,7 +14,7 @@ produced the replies.
 | `thinking.png` | `…thinking`, backend label shows `· Thinking…`, Send disabled |
 | `expanded.png` | **See Less** state with a long reply in the scroll pane |
 | `fable.png` | Fable Protocol theme |
-| `menu.png` | Menu-bar menu with Direct Ollama selected |
+| `menu.png` | Menu-bar menu with Direct Ollama selected and **Copy Reply** highlighted |
 | `notice.png` | Over-limit draft notice (the draft stays in the field) |
 
 They do not prove how the app renders on any macOS version. For real captures

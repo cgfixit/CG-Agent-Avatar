@@ -11,6 +11,27 @@ pub fn expanded_text(raw: &str) -> String {
     sanitized_text(raw, MAX_EXPANDED_CHARS)
 }
 
+/// The text **Copy Reply** puts on the pasteboard, or `None` when there is
+/// nothing to copy.
+///
+/// `shown` is what the bubble holds now and `answer` is the latest finished
+/// model answer. They differ once a status note, error, or setup guidance
+/// replaces the answer, and a pending turn shows `…thinking` (or a partial
+/// stream), so copying is offered only while the bubble shows a finished
+/// answer. The copy is complete: the 8,000-character view cap does not apply,
+/// because the reply is already bounded by the 1 MiB response cap. It is
+/// sanitized like the view, so a paste into a terminal or editor never carries
+/// escape sequences, bidi overrides, or other controls the bubble hid. Tabs
+/// and newlines survive, which keeps code indentation intact.
+pub fn copyable_reply(shown: &str, answer: &str, in_flight: bool) -> Option<String> {
+    if in_flight || answer.is_empty() || shown != answer {
+        return None;
+    }
+    let text = sanitized_text(answer, usize::MAX);
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
 /// Backend-supplied text for a single-line label or tooltip: sanitized like a
 /// reply, with line breaks and tabs folded to spaces, clipped to `max_chars`
 /// (plus `…` when something was dropped).
@@ -397,5 +418,45 @@ mod tests {
                 assert_eq!(bubble_text(&full), expected, "{hostile:?}");
             }
         }
+    }
+
+    #[test]
+    fn copy_reply_is_the_whole_answer_not_the_view_cap() {
+        let long = "y".repeat(MAX_EXPANDED_CHARS * 3);
+        let copied = copyable_reply(&long, &long, false).expect("copyable");
+        assert_eq!(copied.chars().count(), MAX_EXPANDED_CHARS * 3);
+        assert!(!copied.ends_with('…'));
+    }
+
+    #[test]
+    fn copy_reply_strips_what_a_terminal_or_editor_would_act_on() {
+        // ANSI color, an OSC title/hyperlink, a Trojan Source bidi override,
+        // C1 CSI, BEL, and NUL are dropped; indentation and line breaks stay.
+        let raw = "fn main() {\n\t\u{1b}[31mred\u{1b}[0m\u{1b}]8;;https://x.test\u{7}link\u{1b}]8;;\u{7}\n\t// \u{202e}evil\u{2066}\u{9b}\u{7}\0\n}\n";
+        let copied = copyable_reply(raw, raw, false).expect("copyable");
+        assert_eq!(copied, "fn main() {\n\tredlink\n\t// evil\n}");
+    }
+
+    #[test]
+    fn copy_reply_is_offered_only_for_a_finished_answer_on_screen() {
+        assert_eq!(copyable_reply("hi", "hi", false).as_deref(), Some("hi"));
+        // Pending turn: the bubble shows …thinking or a partial stream.
+        assert_eq!(copyable_reply("hi", "hi", true), None);
+        // A status note, error, or guidance replaced the answer.
+        assert_eq!(copyable_reply("ollama asleep", "hi", false), None);
+        // No answer yet, or nothing printable in it.
+        assert_eq!(copyable_reply("", "", false), None);
+        assert_eq!(copyable_reply("harness asleep", "", false), None);
+        let blank = " \n\t\u{1b}[0m\u{202e} ";
+        assert_eq!(copyable_reply(blank, blank, false), None);
+    }
+
+    #[test]
+    fn copy_reply_keeps_the_web_footer_that_says_what_left_the_mac() {
+        let shown = with_lookup_note("Rust 1.90 shipped.", "searched \"rust\"");
+        assert_eq!(
+            copyable_reply(&shown, &shown, false).as_deref(),
+            Some("Rust 1.90 shipped. [via web: searched \"rust\"]")
+        );
     }
 }
