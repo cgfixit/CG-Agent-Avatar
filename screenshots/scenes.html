@@ -80,6 +80,8 @@
   .menu .it { height: 24px; line-height: 24px; padding: 0 10px 0 24px; border-radius: 5px; position: relative; }
   .menu .it.hl { background: #3f7be0; color: #fff; }
   .menu .it.chk::before { content: "\2713"; position: absolute; left: 8px; }
+  .menu .it .key { position: absolute; right: 10px; opacity: .55; }
+  .menu .it.hl .key { opacity: .85; }
   .menu hr { border: 0; border-top: 1px solid rgba(0, 0, 0, .12); margin: 5px 8px; }
   body.menu-scene .menu { display: block; }
 </style>
@@ -112,12 +114,16 @@
 </div>
 
 <div class="menu" id="menu">
-  <div class="it">Talk</div><hr>
+  <div class="it">Talk</div>
+  <div class="it hl">Copy Reply<span class="key">⇧⌘C</span></div><hr>
   <div class="it">Harness (127.0.0.1:8790)</div>
   <div class="it chk">Direct Ollama (qwen3.8:27b-mlx)</div>
   <div class="it">Harness Login…</div>
-  <div class="it">Harness Password Reset…</div><hr>
-  <div class="it hl">Quit CG-Agent-MacOS-Avatar</div>
+  <div class="it">Harness Password Reset…</div>
+  <div class="it">Open Harness</div><hr>
+  <div class="it">Ollama Output Style<span class="key">›</span></div>
+  <div class="it">Settings…<span class="key">⌘,</span></div><hr>
+  <div class="it">Quit CG-Agent-MacOS-Avatar</div>
 </div>
 
 <div class="panel" id="panel"></div>

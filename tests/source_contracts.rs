@@ -146,3 +146,31 @@ fn ollama_web_lookups_stay_on_the_loopback_daemon() {
     assert_eq!(parse("what happened in the news today?"), Intent::Chat);
     assert_eq!(parse("tell me about ollama.com"), Intent::Chat);
 }
+
+#[test]
+fn pasteboard_is_write_only_host_only_and_sanitized() {
+    let src = include_str!("../src/app.rs");
+    let prod = src.split("#[cfg(test)]").next().expect("prod");
+    // One write path: the explicit Copy Reply command.
+    assert_eq!(prod.matches("NSPasteboard::generalPasteboard()").count(), 1);
+    assert!(prod.contains("NSPasteboardContentsOptions::CurrentHostOnly"));
+    assert!(!prod.contains("clearContents"), "use the host-only reset");
+    // Avatar never reads what other apps copied.
+    for read in [
+        "stringForType",
+        "dataForType",
+        "propertyListForType",
+        "readObjectsForClasses",
+        "pasteboardItems",
+        "availableTypeFromArray",
+    ] {
+        assert!(!prod.contains(read), "app.rs reads the pasteboard: {read}");
+    }
+    // What is copied goes through the display sanitizer first.
+    assert!(prod.contains("display::copyable_reply("));
+    assert_eq!(
+        cg_agent::display::copyable_reply("a\u{1b}[2Jb\u{202e}", "a\u{1b}[2Jb\u{202e}", false)
+            .as_deref(),
+        Some("ab")
+    );
+}
