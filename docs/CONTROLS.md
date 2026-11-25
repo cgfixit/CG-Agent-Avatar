@@ -5,6 +5,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Input | Action |
 |---|---|
 | **Talk** | Show the strip, focus the text field (works offline) |
+| **Copy Reply** in the menu / **⇧⌘C** while chat is active | Copy the whole finished reply as plain text: past the 8,000-character view, without escape sequences, bidi overrides, or other hidden controls; tabs, line breaks, and any `[via web: …]` note kept. Unavailable while a reply is pending or the bubble shows a status message. The copy is current-host-only, so Universal Clipboard does not send it to your other devices |
 | **Harness (127.0.0.1:8790)** | Optional. Launches or activates the installed `CG Agent Harness.app` by bundle identifier, then checks the configured port and desktop sidecar for a confirmed status response; HTTPS with a pinned certificate on fresh homes, plain HTTP only on legacy homes with no `tls/server.pem` |
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message via `http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password (native secure text entry), then logs in for later Harness chats |
@@ -171,7 +172,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | Bubble ends in `…` | The preview shows the first six wrapped lines (at most 400 characters) and collapses runs of blank lines. **See More** shows the whole reply. |
 | `harness error: …` | Harness returned an error Avatar has no specific message for; the text after the colon is the harness's own, clipped and sanitized. |
 | `Harness is finishing another reply…` | A previous chat turn is still running; wait a moment and send again. |
-| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit. A reply that would fill it is trimmed (ending in `…`) so the `[via web …]` note or the offer line is never the part that is cut. The 400-character preview can still hide the note; See More shows it. |
+| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit, and **Copy Reply** (⇧⌘C) copies the whole reply. A reply that would fill it is trimmed (ending in `…`) so the `[via web …]` note or the offer line is never the part that is cut. The 400-character preview can still hide the note; See More shows it. |
 
 For fresh native examples, see the [README screenshots](../README.md) and
 [capture provenance](screenshots/README.md). For build errors, see

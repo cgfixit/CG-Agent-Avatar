@@ -15,10 +15,11 @@ use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
     NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType, NSBezelStyle,
     NSButton, NSColor, NSCompositingOperation, NSControlStateValueOff, NSControlStateValueOn,
-    NSEvent, NSFont, NSImage, NSMenu, NSMenuItem, NSNormalWindowLevel, NSPanel, NSPopUpButton,
-    NSScreen, NSScrollView, NSSecureTextField, NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
-    NSStatusWindowLevel, NSTextField, NSTextView, NSView, NSWindow, NSWindowCollectionBehavior,
-    NSWindowStyleMask, NSWorkspace,
+    NSEvent, NSEventModifierFlags, NSFont, NSImage, NSMenu, NSMenuItem, NSMenuItemValidation,
+    NSNormalWindowLevel, NSPanel, NSPasteboard, NSPasteboardContentsOptions,
+    NSPasteboardTypeString, NSPopUpButton, NSScreen, NSScrollView, NSSecureTextField,
+    NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSTextField,
+    NSTextView, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSData, NSNotification, NSObject, NSObjectProtocol, NSPoint,
@@ -51,6 +52,11 @@ const MOOD_EVERY: Duration = Duration::from_millis(250);
 struct Shared {
     mood: Mutex<Mood>,
     last_reply: Mutex<String>,
+    /// The latest finished model answer, exactly as written to `last_reply`.
+    /// **Copy Reply** is offered only while the two match, so any status
+    /// note that later replaces the answer turns it off without every writer
+    /// of `last_reply` having to clear this.
+    last_answer: Mutex<String>,
     pending: Mutex<Option<PendingChat>>,
     pending_login: Mutex<Option<(u64, String, String)>>,
     pending_password_change: Mutex<Option<(u64, String, String)>>,
@@ -278,6 +284,15 @@ define_class!(
 
     unsafe impl NSObjectProtocol for Delegate {}
 
+    unsafe impl NSMenuItemValidation for Delegate {
+        // AppKit asks before showing a menu or running a key equivalent.
+        // Every other Delegate item stays enabled, as before.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            item.action() != Some(sel!(copyReply:)) || self.copyable_reply().is_some()
+        }
+    }
+
     unsafe impl NSApplicationDelegate for Delegate {
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _n: &NSNotification) {
@@ -296,6 +311,11 @@ define_class!(
         #[unsafe(method(talk:))]
         fn talk_action(&self, _sender: Option<&AnyObject>) {
             self.open_talk();
+        }
+
+        #[unsafe(method(copyReply:))]
+        fn copy_reply_action(&self, _sender: Option<&AnyObject>) {
+            self.copy_reply();
         }
 
         #[unsafe(method(useHarness:))]
@@ -599,6 +619,42 @@ impl Delegate {
         }
     }
 
+    /// **Copy Reply** (⇧⌘C), for both the status menu and the Edit menu.
+    fn copy_reply_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+        let item = Self::menu_item(mtm, ns_string!("Copy Reply"), sel!(copyReply:));
+        item.setKeyEquivalent(ns_string!("c"));
+        item.setKeyEquivalentModifierMask(
+            NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        );
+        item.setToolTip(Some(ns_string!(
+            "Copy the whole reply as plain text, without hidden control characters"
+        )));
+        item
+    }
+
+    /// The finished answer on screen, sanitized and uncapped, if there is one.
+    fn copyable_reply(&self) -> Option<String> {
+        let shared = &self.ivars().shared;
+        let shown = shared.last_reply.lock().unwrap();
+        let answer = shared.last_answer.lock().unwrap();
+        display::copyable_reply(&shown, &answer, shared.in_flight.load(Ordering::SeqCst))
+    }
+
+    /// Writes the answer to the general pasteboard as plain text, marked
+    /// current-host-only so Universal Clipboard does not sync it to the
+    /// user's other devices. Avatar only writes, on this explicit command;
+    /// it never reads the pasteboard.
+    fn copy_reply(&self) {
+        let Some(text) = self.copyable_reply() else {
+            return;
+        };
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
+        let _ = pasteboard.setString_forType(&NSString::from_str(&text), unsafe {
+            NSPasteboardTypeString
+        });
+    }
+
     fn setup(&self) {
         let active = theme::active();
         let theme::Metrics {
@@ -626,6 +682,7 @@ impl Delegate {
 
         let menu = NSMenu::new(mtm);
         let talk = Self::menu_item(mtm, ns_string!("Talk"), sel!(talk:));
+        let copy_reply = Self::copy_reply_item(mtm);
         let harness = Self::menu_item(
             mtm,
             ns_string!("Harness (127.0.0.1:8790)"),
@@ -647,6 +704,7 @@ impl Delegate {
         unsafe {
             open_harness.setTarget(Some(self.as_ref()));
             talk.setTarget(Some(self.as_ref()));
+            copy_reply.setTarget(Some(self.as_ref()));
             harness.setTarget(Some(self.as_ref()));
             ollama.setTarget(Some(self.as_ref()));
             login.setTarget(Some(self.as_ref()));
@@ -656,6 +714,7 @@ impl Delegate {
         harness.setState(NSControlStateValueOff);
         ollama.setState(NSControlStateValueOn);
         menu.addItem(&talk);
+        menu.addItem(&copy_reply);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&harness);
         menu.addItem(&ollama);
@@ -721,6 +780,16 @@ impl Delegate {
                 unsafe {
                     entry.setTarget(target);
                 }
+                submenu.addItem(&entry);
+            }
+            if title == "Edit" {
+                // Status-menu key equivalents never fire, so ⇧⌘C lives here
+                // too, where it works while the chat panel is key.
+                let entry = Self::copy_reply_item(mtm);
+                unsafe {
+                    entry.setTarget(Some(self.as_ref()));
+                }
+                submenu.addItem(&NSMenuItem::separatorItem(mtm));
                 submenu.addItem(&entry);
             }
             root.setSubmenu(Some(&submenu));
@@ -2079,6 +2148,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             }
                             match result {
                                 Ok(reply) => {
+                                    *shared.last_answer.lock().unwrap() = reply.clone();
                                     *shared.last_reply.lock().unwrap() = reply;
                                     talking_deadline = Some(Instant::now() + Duration::from_secs(8));
                                     shared.talking.store(true, Ordering::SeqCst);
@@ -2141,6 +2211,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                                     if !reply.web_tools.is_empty() {
                                         text = display::with_web_tools_note(&text, reply.web_tools.len());
                                     }
+                                    *shared.last_answer.lock().unwrap() = text.clone();
                                     *shared.last_reply.lock().unwrap() = text;
                                     talking_deadline = Some(Instant::now() + Duration::from_secs(8));
                                     shared.talking.store(true, Ordering::SeqCst);
@@ -2198,6 +2269,7 @@ pub fn run() {
     let shared = Arc::new(Shared {
         mood: Mutex::new(Mood::Asleep),
         last_reply: Mutex::new(String::new()),
+        last_answer: Mutex::new(String::new()),
         pending: Mutex::new(None),
         pending_login: Mutex::new(None),
         pending_password_change: Mutex::new(None),
