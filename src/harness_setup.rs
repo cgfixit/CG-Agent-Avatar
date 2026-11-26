@@ -212,6 +212,13 @@ impl Guide {
         self.generation == generation && self.phase != Phase::Off
     }
 
+    /// Whether the backend a turn started under is still the selected one:
+    /// no selection since `generation`, and Harness on or off as it was.
+    /// A streamed reply checks this before each write to the bubble.
+    pub fn still_selected(&self, generation: u64, harness: bool) -> bool {
+        self.generation == generation && (self.phase != Phase::Off) == harness
+    }
+
     pub fn endpoint(&self, generation: u64) -> Option<Reachable> {
         if !self.current(generation) {
             return None;
@@ -354,6 +361,27 @@ mod tests {
             },
             ..status("claude-opus-5-5", "claude", true, false)
         }
+    }
+
+    #[test]
+    fn a_streamed_turn_is_live_only_under_the_selection_it_started_with() {
+        // Direct Ollama is the selection with Harness off, where `current`
+        // is false by design: a stream must not use it to mean "still mine".
+        let mut guide = Guide::default();
+        let ollama = guide.generation();
+        assert!(guide.still_selected(ollama, false));
+        assert!(!guide.still_selected(ollama, true));
+        assert!(!guide.current(ollama));
+        guide.select(true);
+        let harness = guide.generation();
+        assert!(!guide.still_selected(ollama, false));
+        assert!(guide.still_selected(harness, true));
+        assert!(!guide.still_selected(harness, false));
+        // Picking the same backend again is a new selection too.
+        guide.select(true);
+        assert!(!guide.still_selected(harness, true));
+        guide.select(false);
+        assert!(guide.still_selected(guide.generation(), false));
     }
 
     #[test]

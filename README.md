@@ -9,9 +9,11 @@ resting, thinking, talking, or needs attention.
 
 - **Stay in the flow.** Open a chat panel that holds still, send with Return or
   **Send**, and close it without losing your draft or the reply.
-- **Never retype a question.** If a reply doesn't arrive (a timeout, a busy
-  backend, a login prompt, a backend switch), your message goes back in the
-  field. Press Return to try again.
+- **Watch the answer arrive.** Replies appear as they are written, from a local
+  Ollama and from Harness alike, instead of after a long `…thinking`.
+- **Never retype a question.** If a reply doesn't arrive (a timeout, a broken
+  stream, a busy backend, a login prompt, a backend switch), your message goes
+  back in the field. Press Return to try again.
 - **Room to read.** Padded replies, larger text, and a separate toolbar keep the
   conversation clear. **See More** opens a scrollable plain-text pane.
 - **Take the answer with you.** **Copy Reply** (⇧⌘C) copies the whole reply as
@@ -80,7 +82,7 @@ needed for the answer.
 
 | Backend | What you need | What Avatar does |
 |---|---|---|
-| **Direct Ollama** (default) | Ollama listening on `http://127.0.0.1:11434` with the exact model tag `qwen3.8:27b-mlx` pulled. Ollama has its own [macOS requirements](https://docs.ollama.com/macos), including macOS 14 or newer. | Sends the bundled [Soul prompt](resources/direct-ollama-system.md), your selected output style, and current message; asks for a direct answer without a hidden reasoning pass. It never installs models or sends previous turns. |
+| **Direct Ollama** (default) | Ollama listening on `http://127.0.0.1:11434` with the exact model tag `qwen3.8:27b-mlx` pulled. Ollama has its own [macOS requirements](https://docs.ollama.com/macos), including macOS 14 or newer. | Sends the bundled [Soul prompt](resources/direct-ollama-system.md), your selected output style, and current message; asks for a direct answer without a hidden reasoning pass, and shows the reply as it is written (up to 4,096 tokens, about 16,000 characters). It never installs models or sends previous turns. |
 | **Harness** | The CG-Agent-Harness desktop app installed, or a headless `cgagentharness serve`. | Choose **Harness (127.0.0.1:8790)** from the menu. Avatar opens the installed desktop app, finds its listener, and reuses or creates a session titled `CG-Agent`. Harness manages its own model and conversation. |
 
 A responding Ollama does not guarantee the fixed model tag is available; the
@@ -124,9 +126,9 @@ Illustrations with synthetic sample data, rendered from the app's theme tokens.
 
 Click the creature or choose **Talk** from its menu-bar menu. The panel stays in
 place while you type and read. **Return** or **Send** submits your message, and
-`…thinking` stays up until the reply starts. Harness replies appear as they are
-written; Direct Ollama replies arrive whole. You can
-write a draft even when the backend is unavailable.
+`…thinking` stays up until the reply starts, then the reply appears as it is
+written, from either backend. Picking the other backend mid-reply stops it. You
+can write a draft even when the backend is unavailable.
 
 Send clears the field. If the turn then ends without an answer, the message
 goes back in the field and the bubble says why, so **Return** sends it again

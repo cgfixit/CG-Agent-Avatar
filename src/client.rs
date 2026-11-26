@@ -2,12 +2,12 @@
 //! Redirects are refused. Only allowlisted paths. No forwarding headers.
 
 use std::fmt;
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::csrf;
-use crate::http::{self, ReadError, MAX_BODY};
+use crate::http::{self, EventError, EventStream, ReadError, MAX_BODY};
 use crate::origin::{LoopbackOrigin, OriginError};
 use crate::paths;
 use crate::validate::{self, ValidateError};
@@ -81,7 +81,7 @@ pub enum ChatEvent<'a> {
 }
 
 /// Whether to keep reading a streamed chat. `Stop` drops the connection,
-/// which makes Harness abort the turn.
+/// which makes the backend (Harness or Ollama) abort the turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
     Continue,
@@ -663,9 +663,8 @@ fn chat_reply(v: Value, session_id: &str) -> Result<ChatReply, ClientError> {
 /// stream ends with one `done` (the same JSON a plain reply has) or `error`.
 /// Unknown event types are skipped.
 ///
-/// Fail closed: the reader stops at `MAX_BODY` bytes in total, so no single
-/// line and no sum of lines can exceed the cap every other response has; a
-/// stream that ends, stalls past `deadline`, or breaks before `done` is an
+/// Fail closed: `EventStream` holds the whole stream to `MAX_BODY` and to
+/// `deadline`, and a stream that ends, stalls, or breaks before `done` is an
 /// error, never a partial reply passed off as complete.
 fn read_chat_stream(
     reader: impl Read,
@@ -673,40 +672,15 @@ fn read_chat_stream(
     deadline: Instant,
     on_event: &mut dyn FnMut(ChatEvent<'_>) -> Flow,
 ) -> Result<ChatReply, ClientError> {
-    let mut reader = BufReader::new(reader.take(MAX_BODY + 1));
-    let mut read = 0u64;
-    let mut line = Vec::new();
-    let mut data = String::new();
+    let mut events = EventStream::new(reader, MAX_BODY, deadline);
     let mut text = String::new();
     loop {
-        line.clear();
-        let n = reader
-            .read_until(b'\n', &mut line)
-            .map_err(|_| ClientError::StreamInterrupted)?;
-        read += n as u64;
-        if read > MAX_BODY {
-            return Err(ClientError::ResponseTooLarge);
-        }
-        if n == 0 || Instant::now() >= deadline {
-            return Err(ClientError::StreamInterrupted);
-        }
-        let field = std::str::from_utf8(&line)
-            .map_err(|_| ClientError::Json)?
-            .trim_end_matches(['\n', '\r']);
-        if let Some(value) = field.strip_prefix("data:") {
-            if !data.is_empty() {
-                data.push('\n');
-            }
-            data.push_str(value.strip_prefix(' ').unwrap_or(value));
-            continue;
-        }
-        // A blank line ends an event. Comments (keep-alives) and the other
-        // SSE fields carry nothing this client uses.
-        if !field.is_empty() || data.is_empty() {
-            continue;
-        }
-        let event: Value = serde_json::from_str(&data).map_err(|_| ClientError::Json)?;
-        data.clear();
+        let data = events.next_data().map_err(|e| match e {
+            EventError::Interrupted => ClientError::StreamInterrupted,
+            EventError::TooLarge => ClientError::ResponseTooLarge,
+            EventError::Malformed => ClientError::Json,
+        })?;
+        let event: Value = serde_json::from_str(data).map_err(|_| ClientError::Json)?;
         let flow = match event.get("type").and_then(Value::as_str) {
             Some("delta") => {
                 text.push_str(event.get("text").and_then(Value::as_str).unwrap_or(""));

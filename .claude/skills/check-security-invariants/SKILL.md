@@ -46,6 +46,7 @@ of the unit tests cited below would run.
 | Discovery skips Ollama's port and privileged ports | `lsof_argv.rs::discover_skips_ollama_and_privileged_ports` |
 | Ollama chat calls only `/v1/chat/completions` (never `/api/generate`); model tag is the constant `qwen3.8:27b-mlx`; no `loop` key | `source_contracts.rs::ollama_relay_is_loopback_openai_compat_only` |
 | Ollama web lookups use only the daemon's `/api/experimental/web_search` and `/web_fetch`; `ollama.rs` never mentions `ollama.com`, `OLLAMA_API_KEY`, `Authorization`, `Bearer`, `"tools"`, or `tool_choice`; plain chat is exactly system + user; only explicit phrases trigger a lookup | `source_contracts.rs::ollama_web_lookups_stay_on_the_loopback_daemon` |
+| A streamed reply (`client.rs`, `ollama.rs`) is read only through `http::EventStream` with `MAX_BODY` and the turn's deadline; neither file has a reader of its own | `source_contracts.rs::streamed_replies_are_read_only_through_the_capped_reader` |
 | `launch.rs` launches the harness only by `CFBundleIdentifier` (`com.cgfixit.agent-harness`), never a hardcoded `/Applications` path, never `Command::new` | `source_contracts.rs::launch_uses_bundle_identifier_never_a_hardcoded_path` |
 | SSRF baits, agent-path joins, CSRF header-injection shapes, path-shaped session IDs, token redaction in `Debug`, oversized status JSON | `objections.rs::ssrf_baits_are_rejected`, `::allowlisted_loopback_still_works`, `::cannot_join_agent_path`, `::csrf_rejects_injection_shapes`, `::validate_refuses_path_session_ids`, `::client_debug_does_not_print_token`, `::oversized_status_json_is_rejected_before_parsing` |
 | The client trusts only the pinned certificate: it is accepted, a different valid certificate or one that doesn't cover loopback is `CertMismatch`, and a plaintext listener is rejected (real loopback TLS handshakes) | `tls_pin.rs::the_pinned_certificate_is_accepted`, `::a_different_valid_certificate_is_a_cert_mismatch`, `::a_pinned_certificate_that_does_not_cover_loopback_is_rejected`, `::a_plain_http_listener_is_rejected_by_the_pinned_client` |
@@ -73,10 +74,13 @@ table above. Read the code, and run the unit test named here.
   and `::web_redirect_is_refused`, `discover.rs::probe_rejects_redirect_and_non_harness`),
   but no test greps for the policy, so a new builder needs its own behavior test.
 - **Body cap**: `http::read_bounded` caps every body at `MAX_BODY` (1 MiB) before it's
-  parsed; `Content-Length` is only an early rejection. Tests:
+  parsed, and `http::EventStream` caps a streamed reply the same way, for the whole
+  stream; `Content-Length` is only an early rejection. Tests:
   `http.rs::bounds_chunked_readers_before_parsing`,
+  `http.rs::the_cap_and_the_deadline_cover_the_whole_stream`,
+  `client.rs::stream_never_reads_past_the_response_cap` and its `ollama.rs` twin,
   `ollama.rs::oversized_bodies_are_refused_on_every_route`,
-  `csrf.rs::rejects_oversized_html`. Any new body read must go through it.
+  `csrf.rs::rejects_oversized_html`. Any new body read must go through one of the two.
 - **Harness TLS**: the HTTPS client pins one certificate, read fresh from the
   harness home's `tls/server.pem` on each probe, with `tls_certs_only` (a root store of
   just that certificate), never `tls_certs_merge` or `danger_accept_invalid_certs`.

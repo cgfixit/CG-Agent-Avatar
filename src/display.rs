@@ -227,9 +227,38 @@ pub fn with_search_offer(reply: &str, query: &str) -> String {
     )
 }
 
+/// Note appended to a Direct Ollama reply the model stopped at its token
+/// budget, so a cut-off answer never reads as a finished one. Unlike
+/// [`append_footer`], nothing is trimmed to make room: **Copy Reply** still
+/// carries the whole reply, and on a reply longer than the expanded view the
+/// view's own `…` marks the cut. The reply is sanitized first so an
+/// unterminated escape at its end cannot swallow the note.
+pub fn with_length_note(reply: &str) -> String {
+    format!(
+        "{}\n\n[Reply stopped at Avatar's length limit. Ask for a shorter or narrower answer.]",
+        sanitized_text(reply, usize::MAX).trim_end()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn length_note_survives_an_unterminated_escape_and_keeps_the_whole_reply() {
+        let long = "x".repeat(MAX_EXPANDED_CHARS + 50);
+        let noted = with_length_note(&format!("{long}\u{1b}]"));
+        assert!(noted.starts_with(&long));
+        assert!(noted.ends_with("narrower answer.]"));
+        assert_eq!(
+            expanded_text(&noted).chars().count(),
+            MAX_EXPANDED_CHARS + 1
+        );
+        assert_eq!(
+            copyable_reply(&noted, &noted, false).as_deref(),
+            Some(noted.as_str())
+        );
+    }
 
     #[test]
     fn web_tools_note_is_appended_only_when_present() {

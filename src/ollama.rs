@@ -4,12 +4,17 @@
 //! lookup (see `web_intent`), this module runs exactly one search or page
 //! read through the local daemon's experimental web routes first and hands
 //! the result to the model as untrusted reference text.
+//!
+//! The reply is read as it is written (`stream: true` on the same chat
+//! route), under the response cap and the chat timeout for the whole stream.
 
 use std::fmt::Write as _;
-use std::time::Duration;
+use std::io::Read;
+use std::time::{Duration, Instant};
 
+use crate::client::Flow;
 use crate::display;
-use crate::http::{self, ReadError, MAX_BODY};
+use crate::http::{self, EventError, EventStream, ReadError, MAX_BODY};
 use crate::origin::{LoopbackOrigin, OriginError};
 use crate::settings::OutputStyle;
 use crate::validate::{self, ValidateError};
@@ -41,9 +46,17 @@ const TEMPERATURE: f32 = 0.7;
 const TOP_P: f32 = 0.8;
 const PRESENCE_PENALTY: f32 = 1.5;
 /// Ollama defaults qwen3.8 to "medium" reasoning. The reasoning text comes
-/// back in a separate field this non-streaming bubble never shows, so it
-/// would only add wait time; "none" asks for the answer directly.
+/// back in a separate field the bubble never shows, so it would only add
+/// wait time; "none" asks for the answer directly.
 const REASONING_EFFORT: &str = "none";
+/// Most tokens the model may write in one reply. A streamed reply costs
+/// about 210 bytes of event framing per token on top of the text itself
+/// (ollama middleware/openai.go wraps every token in a full chunk), and the
+/// whole stream has to fit `MAX_BODY`. At this budget the framing takes
+/// 84% of the cap, so the reply ends with a length note instead of being
+/// lost to `ResponseTooLarge`. It is about 16,000 characters of English,
+/// twice what the expanded view shows.
+const MAX_TOKENS: u32 = 4096;
 /// Most characters of a daemon error message carried into the bubble.
 const DETAIL_CHARS: usize = 160;
 /// Results requested per search, and the most characters of each result or
@@ -77,6 +90,10 @@ pub enum OllamaError {
     WebUnavailable { status: u16 },
     #[error("ollama returned an empty reply")]
     EmptyReply,
+    #[error("ollama stopped before finishing that reply; send it again")]
+    StreamInterrupted,
+    #[error("stopped")]
+    Cancelled,
     #[error("can't read that link: only public http(s) pages")]
     LinkRefused,
     /// The lookup went out but the answer failed; say what left the Mac.
@@ -95,10 +112,33 @@ struct ChatBody<'a> {
     model: &'static str,
     messages: [ChatMessage<'a>; 2],
     stream: bool,
+    max_tokens: u32,
     reasoning_effort: &'static str,
     temperature: f32,
     top_p: f32,
     presence_penalty: f32,
+}
+
+/// One event of the daemon's completion stream. Only the reply text and the
+/// finish reason are read; reasoning, usage, and tool fields are ignored.
+#[derive(Deserialize)]
+struct Chunk {
+    #[serde(default)]
+    choices: Vec<ChunkChoice>,
+}
+
+#[derive(Deserialize)]
+struct ChunkChoice {
+    #[serde(default)]
+    delta: Delta,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct Delta {
+    #[serde(default)]
+    content: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -198,28 +238,34 @@ impl Ollama {
         }))
     }
 
+    /// Replies to one user message in the default style, without previews.
+    pub fn chat(&self, message: &str) -> Result<String, OllamaError> {
+        self.chat_stream(message, OutputStyle::Default, "", &mut |_| Flow::Continue)
+    }
+
     /// Replies to one user message. An explicit web request ("search the web
     /// for …", "read <link>") runs one lookup first; anything else is a plain
     /// local chat that never touches the web routes.
-    pub fn chat(&self, message: &str) -> Result<String, OllamaError> {
-        self.chat_with_style(message, OutputStyle::Default, "")
-    }
-
-    pub fn chat_with_style(
+    ///
+    /// `on_text` sees the reply so far each time the model adds to it and may
+    /// stop the turn. It is a preview: the returned reply is the finished one,
+    /// with any lookup note, offer line, or length note this module adds.
+    pub fn chat_stream(
         &self,
         message: &str,
         style: OutputStyle,
         custom: &str,
+        on_text: &mut dyn FnMut(&str) -> Flow,
     ) -> Result<String, OllamaError> {
         let message = validate::message(message)?;
         let system = style.system_prompt(custom)?;
         let (context, sent) = match web_intent::parse(message) {
-            Intent::Chat => return self.complete(message, &system),
+            Intent::Chat => return self.complete(message, &system, on_text),
             // Too thin to send anywhere: answer here, then offer the phrase
             // that would search. Nothing leaves the machine.
             Intent::Offer(query) => {
                 return Ok(display::with_search_offer(
-                    &self.complete(message, &system)?,
+                    &self.complete(message, &system, on_text)?,
                     &query,
                 ))
             }
@@ -239,11 +285,12 @@ impl Ollama {
             }
         };
         let reply = self
-            .complete(&format!("{context}\n\n{message}"), &system)
+            .complete(&format!("{context}\n\n{message}"), &system, on_text)
             .map_err(|e| match e {
                 // The app turns these into actionable text ("pull …",
-                // "ollama asleep"), which matters more than the note.
-                OllamaError::ModelMissing | OllamaError::Unreachable => e,
+                // "ollama asleep"), which matters more than the note. A turn
+                // the caller stopped has no one left to read a note.
+                OllamaError::ModelMissing | OllamaError::Unreachable | OllamaError::Cancelled => e,
                 other => OllamaError::AfterLookup {
                     sent: sent.clone(),
                     cause: other.to_string(),
@@ -288,8 +335,14 @@ impl Ollama {
         response_bytes(resp)
     }
 
-    fn complete(&self, user: &str, system: &str) -> Result<String, OllamaError> {
+    fn complete(
+        &self,
+        user: &str,
+        system: &str,
+        on_text: &mut dyn FnMut(&str) -> Flow,
+    ) -> Result<String, OllamaError> {
         let body = chat_body(user, system);
+        let deadline = Instant::now() + CHAT_TIMEOUT;
         let resp = self
             .http
             .post(self.url(POST_CHAT)?)
@@ -310,20 +363,64 @@ impl Ollama {
         if status != 200 {
             return Err(http_error(status, resp));
         }
-        let bytes = response_bytes(resp)?;
-        let v: Value = serde_json::from_slice(&bytes).map_err(|_| OllamaError::Json)?;
-        let content = v
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_str())
-            .ok_or(OllamaError::Json)?;
-        if content.trim().is_empty() {
-            return Err(OllamaError::EmptyReply);
+        if resp.content_length().is_some_and(|len| len > MAX_BODY) {
+            return Err(OllamaError::ResponseTooLarge);
         }
-        Ok(content.to_string())
+        read_completion_stream(resp, deadline, on_text)
     }
+}
+
+/// Reads the daemon's completion stream (ollama middleware/openai.go
+/// `ChatWriter`): each event is a chunk whose `choices[0].delta.content`
+/// extends the reply, the last chunk carries a `finish_reason`, and
+/// `data: [DONE]` ends the stream. Chunks with no text are skipped.
+///
+/// Fail closed: `EventStream` holds the whole stream to `MAX_BODY` and to
+/// `deadline`, and a stream that ends or breaks before `[DONE]` is an error,
+/// never a partial reply passed off as complete. That covers a daemon error
+/// after the first token, which arrives as a chunk with no text and then
+/// the end of the stream. A reply the model stopped at `MAX_TOKENS` is
+/// complete as far as the daemon is concerned, so it is kept and marked.
+fn read_completion_stream(
+    reader: impl Read,
+    deadline: Instant,
+    on_text: &mut dyn FnMut(&str) -> Flow,
+) -> Result<String, OllamaError> {
+    let mut events = EventStream::new(reader, MAX_BODY, deadline);
+    let mut text = String::new();
+    let mut cut = false;
+    loop {
+        let data = events.next_data().map_err(|e| match e {
+            EventError::TooLarge => OllamaError::ResponseTooLarge,
+            EventError::Malformed => OllamaError::Json,
+            EventError::Interrupted if Instant::now() >= deadline => OllamaError::Timeout,
+            EventError::Interrupted => OllamaError::StreamInterrupted,
+        })?;
+        if data == "[DONE]" {
+            break;
+        }
+        let chunk: Chunk = serde_json::from_str(data).map_err(|_| OllamaError::Json)?;
+        let Some(choice) = chunk.choices.into_iter().next() else {
+            continue;
+        };
+        cut |= choice.finish_reason.as_deref() == Some("length");
+        let piece = choice.delta.content.unwrap_or_default();
+        if piece.is_empty() {
+            continue;
+        }
+        text.push_str(&piece);
+        if on_text(&text) == Flow::Stop {
+            return Err(OllamaError::Cancelled);
+        }
+    }
+    if text.trim().is_empty() {
+        return Err(OllamaError::EmptyReply);
+    }
+    Ok(if cut {
+        display::with_length_note(&text)
+    } else {
+        text
+    })
 }
 
 /// Wraps a lookup failure that happened after the request left the machine
@@ -359,7 +456,8 @@ fn chat_body<'a>(message: &'a str, system: &'a str) -> ChatBody<'a> {
                 content: message,
             },
         ],
-        stream: false,
+        stream: true,
+        max_tokens: MAX_TOKENS,
         reasoning_effort: REASONING_EFFORT,
         temperature: TEMPERATURE,
         top_p: TOP_P,
@@ -507,11 +605,13 @@ mod tests {
             let chat = server
                 .mock("POST", POST_CHAT)
                 .match_body(mockito::Matcher::Json(expected))
-                .with_body(r#"{"choices":[{"message":{"content":"hello"}}]}"#)
+                .with_body(sse_reply("hello"))
                 .expect(1)
                 .create();
             assert_eq!(
-                ollama.chat_with_style("hi", style, custom).unwrap(),
+                ollama
+                    .chat_stream("hi", style, custom, &mut |_| Flow::Continue)
+                    .unwrap(),
                 "hello"
             );
             chat.assert();
@@ -529,7 +629,12 @@ mod tests {
             .create();
         let ollama = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(
-            ollama.chat_with_style("search the web for Rust", OutputStyle::Custom, ""),
+            ollama.chat_stream(
+                "search the web for Rust",
+                OutputStyle::Custom,
+                "",
+                &mut |_| Flow::Continue
+            ),
             Err(OllamaError::Validate(ValidateError::OutputStyleInvalid))
         ));
         request.assert();
@@ -539,7 +644,8 @@ mod tests {
     fn body_has_fixed_model_no_loop_no_tools() {
         let v = chat_body_json("hi");
         assert_eq!(v["model"], MODEL);
-        assert_eq!(v["stream"], false);
+        assert_eq!(v["stream"], true);
+        assert_eq!(v["max_tokens"], MAX_TOKENS);
         assert!(v.get("loop").is_none());
         assert!(v.get("tools").is_none());
         assert_eq!(v["messages"][0]["role"], "system");
@@ -619,7 +725,7 @@ mod tests {
         let _chat = server
             .mock("POST", POST_CHAT)
             .with_status(200)
-            .with_body(json_reply("  "))
+            .with_body(sse_reply("  "))
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert!(matches!(o.chat("hi"), Err(OllamaError::EmptyReply)));
@@ -661,7 +767,7 @@ mod tests {
             .mock("POST", POST_CHAT)
             .match_body(mockito::Matcher::Regex("No results.".into()))
             .with_status(200)
-            .with_body(json_reply("nothing found"))
+            .with_body(sse_reply("nothing found"))
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
@@ -824,7 +930,7 @@ mod tests {
             .match_body(mockito::Matcher::Regex(format!("\"model\":\"{MODEL}\"")))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"choices":[{"message":{"role":"assistant","content":"yo"}}]}"#)
+            .with_body(sse_reply("yo"))
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(o.chat("hi").unwrap(), "yo");
@@ -920,9 +1026,270 @@ mod tests {
         ));
     }
 
-    fn json_reply(content: &str) -> String {
-        serde_json::json!({"choices":[{"message":{"role":"assistant","content":content}}]})
-            .to_string()
+    /// One event as the daemon writes it (ollama v0.40.18
+    /// middleware/openai.go, openai/openai.go `toChunk` and `FinishChunk`).
+    fn chunk(delta: Value, finish: Option<&str>) -> String {
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "id": "chatcmpl-42",
+                "object": "chat.completion.chunk",
+                "created": 1_795_667_106,
+                "model": MODEL,
+                "system_fingerprint": "fp_ollama",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            })
+        )
+    }
+
+    /// A whole reply stream: the role rides on the first chunk, an empty
+    /// delta carries the finish reason, and `[DONE]` closes the stream.
+    fn stream(pieces: &[&str], finish: &str) -> String {
+        let mut out = String::new();
+        for (i, piece) in pieces.iter().enumerate() {
+            let delta = if i == 0 {
+                serde_json::json!({"role": "assistant", "content": piece})
+            } else {
+                serde_json::json!({"content": piece})
+            };
+            out.push_str(&chunk(delta, None));
+        }
+        out.push_str(&chunk(serde_json::json!({}), Some(finish)));
+        out.push_str("data: [DONE]\n\n");
+        out
+    }
+
+    /// `content`, streamed in two pieces.
+    fn sse_reply(content: &str) -> String {
+        let mid = content
+            .char_indices()
+            .nth(content.chars().count() / 2)
+            .map_or(0, |(i, _)| i);
+        stream(&[&content[..mid], &content[mid..]], "stop")
+    }
+
+    fn collect_stream(
+        body: &[u8],
+        stop_after: usize,
+    ) -> (Vec<String>, Result<String, OllamaError>) {
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let result = read_completion_stream(body, deadline, &mut |text| {
+            seen.push(text.to_string());
+            if seen.len() >= stop_after {
+                Flow::Stop
+            } else {
+                Flow::Continue
+            }
+        });
+        (seen, result)
+    }
+
+    #[test]
+    fn reply_is_shown_as_the_daemon_streams_it() {
+        // A reasoning-only chunk, a usage chunk with no choice, CRLF line
+        // ends, and a keep-alive comment are all things the stream may carry.
+        let body = format!(
+            ": keep-alive\n\n{}{}{}{}data: {{\"id\":\"chatcmpl-42\",\"choices\":[],\"usage\":{{\"total_tokens\":9}}}}\n\n{}data: [DONE]\r\n\r\n",
+            chunk(serde_json::json!({"role": "assistant", "content": ""}), None),
+            chunk(serde_json::json!({"reasoning": "hmm"}), None),
+            chunk(serde_json::json!({"content": "Hel"}), None),
+            chunk(serde_json::json!({"content": "lo \u{1f44b}"}), None).replace("\n\n", "\r\n\r\n"),
+            chunk(serde_json::json!({}), Some("stop")),
+        );
+        let mut server = mockito::Server::new();
+        let chat = server
+            .mock("POST", POST_CHAT)
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "model": MODEL,
+                "stream": true,
+                "max_tokens": MAX_TOKENS,
+            })))
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |w| w.write_all(body.as_bytes()))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        let mut seen = Vec::new();
+        let reply = o
+            .chat_stream("hi", OutputStyle::Default, "", &mut |text| {
+                seen.push(text.to_string());
+                Flow::Continue
+            })
+            .unwrap();
+        chat.assert();
+        println!("previews: {seen:?}\nfinal: {reply:?}");
+        assert_eq!(seen, ["Hel", "Hello \u{1f44b}"]);
+        assert_eq!(reply, "Hello \u{1f44b}");
+    }
+
+    #[test]
+    fn previews_come_before_the_note_a_lookup_adds() {
+        let mut server = mockito::Server::new();
+        let _search = server
+            .mock("POST", POST_WEB_SEARCH)
+            .with_body(r#"{"results":[]}"#)
+            .create();
+        let _chat = server
+            .mock("POST", POST_CHAT)
+            .with_body(stream(&["Sept", "ember"], "stop"))
+            .create();
+        let o = Ollama::from_origin(origin_for(&server)).unwrap();
+        let mut seen = Vec::new();
+        let reply = o.chat_stream(
+            "search the web for rust 1.90",
+            OutputStyle::Default,
+            "",
+            &mut |text| {
+                seen.push(text.to_string());
+                Flow::Continue
+            },
+        );
+        assert_eq!(seen, ["Sept", "September"]);
+        assert_eq!(
+            reply.unwrap(),
+            "September [via web: searched \"rust 1.90\"]"
+        );
+        // Stopping the turn is not an error to explain, even after a lookup.
+        assert!(matches!(
+            o.chat_stream(
+                "search the web for rust 1.90",
+                OutputStyle::Default,
+                "",
+                &mut |_| Flow::Stop
+            ),
+            Err(OllamaError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn stream_fails_closed_when_cut_short_stopped_or_late() {
+        // Ended without `[DONE]`: never a partial reply passed off as complete.
+        let partial = format!(
+            "{}{}",
+            chunk(serde_json::json!({"content": "a"}), None),
+            chunk(serde_json::json!({"content": "b"}), None)
+        );
+        let (seen, result) = collect_stream(partial.as_bytes(), usize::MAX);
+        assert_eq!(seen, ["a", "ab"]);
+        assert!(matches!(result, Err(OllamaError::StreamInterrupted)));
+        // A daemon error after the first token is an empty chunk, then the end.
+        let failed = format!(
+            "{partial}{}",
+            chunk(serde_json::json!({"content": ""}), None)
+        );
+        assert!(matches!(
+            collect_stream(failed.as_bytes(), usize::MAX).1,
+            Err(OllamaError::StreamInterrupted)
+        ));
+        // A finish reason alone does not end the stream; `[DONE]` does.
+        let unfinished = stream(&["a"], "stop").replace("data: [DONE]\n\n", "");
+        assert!(matches!(
+            collect_stream(unfinished.as_bytes(), usize::MAX).1,
+            Err(OllamaError::StreamInterrupted)
+        ));
+        // An event cut mid-line is not dispatched.
+        let (seen, result) = collect_stream(br#"data: {"choices":[{"delta":{"con"#, usize::MAX);
+        assert!(seen.is_empty());
+        assert!(matches!(result, Err(OllamaError::StreamInterrupted)));
+        // Stop ends the read at once; later events are never looked at.
+        let whole = stream(&["a", "b"], "stop");
+        let (seen, result) = collect_stream(whole.as_bytes(), 1);
+        assert_eq!(seen, ["a"]);
+        assert!(matches!(result, Err(OllamaError::Cancelled)));
+        // Past the turn's deadline, even a complete stream is refused.
+        let late = Instant::now() - Duration::from_secs(1);
+        assert!(matches!(
+            read_completion_stream(whole.as_bytes(), late, &mut |_| Flow::Continue),
+            Err(OllamaError::Timeout)
+        ));
+        for bad in ["data: not json\n\n", "data: {\"choices\":7}\n\n"] {
+            assert!(matches!(
+                collect_stream(bad.as_bytes(), usize::MAX).1,
+                Err(OllamaError::Json)
+            ));
+        }
+        // A reply of no text is still explicit.
+        assert!(matches!(
+            collect_stream(stream(&[""], "stop").as_bytes(), usize::MAX).1,
+            Err(OllamaError::EmptyReply)
+        ));
+    }
+
+    #[test]
+    fn a_reply_stopped_at_the_token_budget_is_kept_and_marked() {
+        let (seen, result) =
+            collect_stream(stream(&["one ", "two"], "length").as_bytes(), usize::MAX);
+        assert_eq!(seen, ["one ", "one two"]);
+        let reply = result.unwrap();
+        println!("{reply}");
+        assert!(reply.starts_with("one two\n\n[Reply stopped at Avatar's length limit"));
+        // A reply that ended on its own carries no note.
+        assert_eq!(
+            collect_stream(stream(&["one ", "two"], "stop").as_bytes(), usize::MAX)
+                .1
+                .unwrap(),
+            "one two"
+        );
+    }
+
+    /// Endless input, counting what the reader actually pulled.
+    struct Endless<'a> {
+        chunk: &'a [u8],
+        at: usize,
+        pulled: &'a std::cell::Cell<u64>,
+    }
+
+    impl Read for Endless<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf.len().min(self.chunk.len() - self.at);
+            buf[..n].copy_from_slice(&self.chunk[self.at..self.at + n]);
+            self.at = (self.at + n) % self.chunk.len();
+            self.pulled.set(self.pulled.get() + n as u64);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn stream_never_reads_past_the_response_cap() {
+        let token = chunk(serde_json::json!({"content": " the"}), None);
+        // Many small events, then one line that never ends.
+        for endless in [token.as_bytes(), &b"data: aaaaaaaaaaaaaaaa"[..]] {
+            let pulled = std::cell::Cell::new(0);
+            let mut previews = 0u64;
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let result = read_completion_stream(
+                Endless {
+                    chunk: endless,
+                    at: 0,
+                    pulled: &pulled,
+                },
+                deadline,
+                &mut |_| {
+                    previews += 1;
+                    Flow::Continue
+                },
+            );
+            println!(
+                "endless stream: {:?} after {} bytes pulled (cap {MAX_BODY}), {previews} previews",
+                result.as_ref().unwrap_err(),
+                pulled.get()
+            );
+            assert!(matches!(result, Err(OllamaError::ResponseTooLarge)));
+            assert_eq!(pulled.get(), MAX_BODY + 1);
+        }
+    }
+
+    #[test]
+    fn a_full_length_reply_fits_under_the_response_cap() {
+        // Every token framed the way the daemon frames it, with room for
+        // tokens ten times the usual four bytes.
+        let token = chunk(serde_json::json!({"content": "x".repeat(40)}), None);
+        let wire = token.len() as u64 * u64::from(MAX_TOKENS);
+        println!(
+            "{} bytes per token, {wire} for {MAX_TOKENS} tokens (cap {MAX_BODY})",
+            token.len()
+        );
+        assert!(wire < MAX_BODY, "{wire}");
     }
 
     #[test]
@@ -934,7 +1301,7 @@ mod tests {
             .mock("POST", POST_CHAT)
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(json_reply("yo"))
+            .with_body(sse_reply("yo"))
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(o.chat("what's new in rust?").unwrap(), "yo");
@@ -951,7 +1318,7 @@ mod tests {
             .mock("POST", POST_CHAT)
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(json_reply("An oxide."))
+            .with_body(sse_reply("An oxide."))
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
@@ -987,7 +1354,7 @@ mod tests {
             ]))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(json_reply("September"))
+            .with_body(sse_reply("September"))
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
@@ -1022,7 +1389,7 @@ mod tests {
             ]))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(json_reply("short post"))
+            .with_body(sse_reply("short post"))
             .create();
         let o = Ollama::from_origin(origin_for(&server)).unwrap();
         assert_eq!(
@@ -1128,7 +1495,7 @@ mod tests {
     #[test]
     fn oversized_bodies_are_refused_on_every_route() {
         let big = "x".repeat(MAX_BODY as usize + 1);
-        let reply = format!(r#"{{"choices":[{{"message":{{"content":"{big}"}}}}]}}"#);
+        let reply = stream(&[&big], "stop");
         let mut server = mockito::Server::new();
         let _chat = server
             .mock("POST", POST_CHAT)
