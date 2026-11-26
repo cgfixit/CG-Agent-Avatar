@@ -18,7 +18,7 @@ the rule: put new code in the lowest layer that can hold it.
    web-lookup intent parsing. Pure logic, no AppKit, builds and tests on any OS.
 2. `tls.rs`, `client.rs`, `home.rs`, `discover.rs`, `ollama.rs`, `launch.rs`: the actual
    backend I/O built on layer 1. This is where a new HTTP call lives.
-3. `harness_setup.rs`, `mood.rs`, `theme.rs`, `display.rs`: portable UI *state* (what to
+3. `harness_setup.rs`, `draft.rs`, `mood.rs`, `theme.rs`, `display.rs`: portable UI *state* (what to
    show), still no AppKit dependency. These have their own tests that run on any
    platform.
 4. `app.rs` (`#[cfg(target_os = "macos")]` only): the AppKit wiring: `NSStatusItem`,

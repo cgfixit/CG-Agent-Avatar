@@ -29,6 +29,7 @@ use objc2_foundation::{
 use crate::client::{ChatEvent, Client, ClientError, Flow, SessionJar, Status};
 use crate::discover;
 use crate::display;
+use crate::draft::Unanswered;
 use crate::harness_setup::{self, BackendDetail, Guide, Phase};
 use crate::home;
 use crate::mood::{self, Health, Mood};
@@ -58,6 +59,9 @@ struct Shared {
     /// of `last_reply` having to clear this.
     last_answer: Mutex<String>,
     pending: Mutex<Option<PendingChat>>,
+    /// The message of a turn that ended without an answer, on its way back
+    /// to the chat field so Return can send it again.
+    unanswered: Unanswered,
     pending_login: Mutex<Option<(u64, String, String)>>,
     pending_password_change: Mutex<Option<(u64, String, String)>>,
     in_flight: AtomicBool,
@@ -85,6 +89,7 @@ impl Shared {
             last_reply: Mutex::new(String::new()),
             last_answer: Mutex::new(String::new()),
             pending: Mutex::new(None),
+            unanswered: Unanswered::default(),
             pending_login: Mutex::new(None),
             pending_password_change: Mutex::new(None),
             in_flight: AtomicBool::new(false),
@@ -1526,6 +1531,18 @@ impl Delegate {
         if self.ivars().shared.click.swap(false, Ordering::SeqCst) {
             self.open_talk();
         }
+        // Send cleared the field; an unanswered message goes back into it
+        // unless a new draft is already there.
+        if let Some(input) = self.ivars().input.borrow().as_ref() {
+            let restored = self
+                .ivars()
+                .shared
+                .unanswered
+                .restore(|| input.stringValue().to_string());
+            if let Some(message) = restored {
+                input.setStringValue(&NSString::from_str(&message));
+            }
+        }
 
         let active = theme::active();
         let motion = active.motion;
@@ -2143,6 +2160,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                         if shared.backend.load(Ordering::SeqCst) != backend
                             || shared.guide.lock().unwrap().generation() != generation
                         {
+                            shared.unanswered.hold(message);
                             shared.in_flight.store(false, Ordering::SeqCst);
                             continue;
                         }
@@ -2150,6 +2168,7 @@ fn spawn_workers(shared: Arc<Shared>) {
                             let guide = shared.guide.lock().unwrap();
                             let Some(endpoint) = guide.ready_endpoint(generation) else {
                                 *shared.last_reply.lock().unwrap() = guide.guidance();
+                                shared.unanswered.hold(message);
                                 shared.in_flight.store(false, Ordering::SeqCst);
                                 continue;
                             };
@@ -2176,9 +2195,13 @@ fn spawn_workers(shared: Arc<Shared>) {
                             if shared.backend.load(Ordering::SeqCst) != backend
                                 || !guide.still_selected(generation, false)
                             {
+                                shared.unanswered.hold(message);
                                 shared.in_flight.store(false, Ordering::SeqCst);
                                 shared.streaming.store(false, Ordering::SeqCst);
                                 continue;
+                            }
+                            if result.is_err() {
+                                shared.unanswered.hold(message);
                             }
                             match result {
                                 Ok(reply) => {
@@ -2235,9 +2258,13 @@ fn spawn_workers(shared: Arc<Shared>) {
                             }
                             let mut guide = shared.guide.lock().unwrap();
                             if !guide.current(generation) {
+                                shared.unanswered.hold(message);
                                 shared.in_flight.store(false, Ordering::SeqCst);
                                 shared.streaming.store(false, Ordering::SeqCst);
                                 continue;
+                            }
+                            if result.is_err() {
+                                shared.unanswered.hold(message);
                             }
                             match result {
                                 Ok(reply) => {
