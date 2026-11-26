@@ -9,6 +9,9 @@ resting, thinking, talking, or needs attention.
 
 - **Stay in the flow.** Open a chat panel that holds still, send with Return or
   **Send**, and close it without losing your draft or the reply.
+- **Never retype a question.** If a reply doesn't arrive (a timeout, a busy
+  backend, a login prompt, a backend switch), your message goes back in the
+  field. Press Return to try again.
 - **Room to read.** Padded replies, larger text, and a separate toolbar keep the
   conversation clear. **See More** opens a scrollable plain-text pane.
 - **Take the answer with you.** **Copy Reply** (⇧⌘C) copies the whole reply as
@@ -124,6 +127,14 @@ place while you type and read. **Return** or **Send** submits your message, and
 `…thinking` stays up until the reply starts. Harness replies appear as they are
 written; Direct Ollama replies arrive whole. You can
 write a draft even when the backend is unavailable.
+
+Send clears the field. If the turn then ends without an answer, the message
+goes back in the field and the bubble says why, so **Return** sends it again
+with nothing retyped. This covers a timeout, a broken stream, a busy or
+rate-limited backend, Ollama asleep or missing its model, a Harness login or
+setup step, and switching backends mid-reply. Anything you typed while waiting
+takes priority: the field is never overwritten, and the old message is dropped
+instead. The message stays in memory only and is never resent without you.
 
 ![Expanded native reply pane with a separate reply toolbar](docs/screenshots/expanded-reply.jpg)
 

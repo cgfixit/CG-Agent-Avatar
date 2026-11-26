@@ -174,3 +174,43 @@ fn pasteboard_is_write_only_host_only_and_sanitized() {
         Some("ab")
     );
 }
+
+#[test]
+fn unanswered_message_stays_in_memory_and_returns_only_to_the_field() {
+    let draft = include_str!("../src/draft.rs");
+    let draft = draft.split("#[cfg(test)]").next().expect("prod");
+    // The slot is a plain in-memory handoff: no disk, network, environment,
+    // preferences, or logging.
+    for io in [
+        "std::fs",
+        "std::io",
+        "std::env",
+        "std::net",
+        "reqwest",
+        "NSUserDefaults",
+        "println!",
+        "eprintln!",
+        "dbg!",
+        "log::",
+        "tracing",
+    ] {
+        assert!(!draft.contains(io), "draft.rs reaches past memory: {io}");
+    }
+    let app = include_str!("../src/app.rs");
+    let prod = app.split("#[cfg(test)]").next().expect("prod");
+    // One way out: the main-thread tick puts it back in the chat field, never
+    // resending it by itself.
+    assert_eq!(prod.matches(".restore(|| input.stringValue()").count(), 1);
+    assert!(prod.contains("input.setStringValue(&NSString::from_str(&message))"));
+    // Saved preferences never carry it.
+    let persist = prod
+        .split("fn persist_settings")
+        .nth(1)
+        .and_then(|rest| rest.split("\n    fn ").next())
+        .expect("persist_settings");
+    assert!(!persist.contains("unanswered"));
+    // A draft typed while waiting always wins.
+    let slot = cg_agent::draft::Unanswered::default();
+    slot.hold("old".into());
+    assert_eq!(slot.restore(|| "new draft".into()), None);
+}

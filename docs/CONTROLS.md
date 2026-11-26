@@ -16,6 +16,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | **Quit CG-Agent-MacOS-Avatar** | Terminate |
 | Click the creature | Same as Talk |
 | Type, Return or **Send** | Send. Reply appears in the bubble **above** the avatar; while a request is busy, the next draft stays in the field |
+| A turn ends without an answer | The message you sent goes back in the field (it was cleared on Send) and the bubble shows the reason; press Return to send it again. Applies to every error below, to Harness login or setup prompts, and to switching backends mid-reply. If you typed a new draft while waiting, that draft stays and the old message is dropped. Nothing is resent on its own |
 | **Close** | Hide the chat and let the creature roam again; reopening preserves the draft, reply, and expansion state |
 | `search the web for …`, `please look up …`, `google: …` | Direct Ollama runs one web search first, then answers from the results. See [Web lookups](#web-lookups-direct-ollama) |
 | `read <link>`, `summarize <link>` | Direct Ollama reads that one public page first, then answers from it |
@@ -30,7 +31,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness model confirmed | The panel label names it: `Harness · <model>` for a local model, `Harness · cloud · <model>` when messages leave this Mac. Hover for the provider. The name is clipped to 24 characters; while a reply is pending the label reads `Harness · cloud · Thinking…`, keeping the cloud marker |
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
 | Harness asks to confirm a link | During a reply, the bubble says `Harness wants to read a link on <site> that the model wrote itself. Avatar cannot approve reads, so Harness will decline it within 120 seconds. To have it read, put the full link in your message.` Avatar never answers that question |
-| `Harness stopped before finishing that reply — send it again` | The reply stream ended, stalled past 12 minutes, or broke before Harness finished. Nothing partial is kept as the answer |
+| `Harness stopped before finishing that reply — send it again` | The reply stream ended, stalled past 12 minutes, or broke before Harness finished. Nothing partial is kept as the answer. Your message is back in the field; Return resends it (Harness may already have recorded the first attempt in its session) |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Direct Ollama appends `[via web: searched "…"]` or `[via web: read host/path…]`, naming what was sent (clipped to 60 characters). Harness appends `[via web ×N]`, counting its own web tool calls. Avatar never fetches pages itself |
 
@@ -155,7 +156,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 |---|---|
 | `ollama asleep` | Start the local service on `127.0.0.1:11434`; Avatar does not launch it. Confirm it lists the exact fixed model tag. |
 | `pull qwen3.8:27b-mlx` | The service is running, but its model list has no entry named exactly `qwen3.8:27b-mlx`. Other `qwen3.8:27b` variants don't count. Install that tag in the service (Ollama older than v0.32.12 doesn't offer it, so update first); the model is not configurable in the menu. |
-| `ollama: ollama took too long to answer…` | The service accepted the request but didn't finish within 12 minutes, often a first load of the ~18 GB model on a busy Mac. Try again once it has loaded. |
+| `ollama: ollama took too long to answer…` | The service accepted the request but didn't finish within 12 minutes, often a first load of the ~18 GB model on a busy Mac. Once it has loaded, press Return: your message is back in the field. |
 | `ollama: ollama http N: <reason>` | The service rejected the turn and gave its reason. `…not found, try pulling it first` means the tag is listed but its files are missing: pull it again. `server busy` (503) means its queue is full. A 500 about the MLX runner usually means the model couldn't load (memory). |
 | `ollama: ollama returned an empty reply` | The model answered with no text. Send the message again. |
 | `ollama: web lookup unavailable (http 404)…` | This Ollama predates the web routes. Update Ollama. |
