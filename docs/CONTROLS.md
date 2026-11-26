@@ -31,13 +31,17 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Harness certificate changed | Bubble says `harness certificate changed — verify it, then re-check trust`; the confirmed endpoint is cleared, so sending and authentication remain unavailable until pinned HTTPS status succeeds |
 | Harness asks to confirm a link | During a reply, the bubble says `Harness wants to read a link on <site> that the model wrote itself. Avatar cannot approve reads, so Harness will decline it within 120 seconds. To have it read, put the full link in your message.` Avatar never answers that question |
 | `Harness stopped before finishing that reply — send it again` | The reply stream ended, stalled past 12 minutes, or broke before Harness finished. Nothing partial is kept as the answer |
+| `ollama: ollama stopped before finishing that reply; send it again` | Ollama's reply stream ended or broke before it finished. Nothing partial is kept as the answer |
+| Reply ends with `[Reply stopped at Avatar's length limit. Ask for a shorter or narrower answer.]` | A Direct Ollama reply reached its 4,096-token limit (about 16,000 characters of English). The text up to there is kept, and **Copy Reply** copies all of it |
 | Harness rate limit hit | Bubble says `harness is rate limiting — wait a few seconds` (Harness allows 60 API requests per minute per address by default, shared with its console) |
 | A reply used the web | Direct Ollama appends `[via web: searched "…"]` or `[via web: read host/path…]`, naming what was sent (clipped to 60 characters). Harness appends `[via web ×N]`, counting its own web tool calls. Avatar never fetches pages itself |
 
-While a turn is in flight the bubble says `…thinking`. A Harness reply then
-appears as it is written and the creature talks while it arrives; the finished
-reply replaces the preview. Direct Ollama replies are not streamed. Choosing
-another backend mid-reply stops the Harness turn.
+While a turn is in flight the bubble says `…thinking`. The reply then appears
+as it is written, from either backend, and the creature talks while it arrives;
+the finished reply replaces the preview. A Direct Ollama web lookup runs before
+the first words, so `…thinking` covers it. Choosing another backend mid-reply
+stops the turn: Avatar closes the connection, and Harness or Ollama stops
+generating.
 The Send button is unavailable while a message is queued or being answered;
 you can keep typing the next draft. The panel identifies the selected backend
 and, for Harness, the model it reports and whether that model is a cloud one.
@@ -158,6 +162,8 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | `ollama: ollama took too long to answer…` | The service accepted the request but didn't finish within 12 minutes, often a first load of the ~18 GB model on a busy Mac. Try again once it has loaded. |
 | `ollama: ollama http N: <reason>` | The service rejected the turn and gave its reason. `…not found, try pulling it first` means the tag is listed but its files are missing: pull it again. `server busy` (503) means its queue is full. A 500 about the MLX runner usually means the model couldn't load (memory). |
 | `ollama: ollama returned an empty reply` | The model answered with no text. Send the message again. |
+| `ollama: ollama stopped before finishing that reply…` | The reply stream ended early: the model runner stopped (often memory), or Ollama was quit or restarted. The words already shown are not kept. Check Ollama's log, then send the message again. |
+| `ollama: response too large` | The reply stream passed Avatar's 1 MiB response limit, which the 4,096-token limit normally prevents. Ask for a shorter answer; if it repeats, update Ollama. |
 | `ollama: web lookup unavailable (http 404)…` | This Ollama predates the web routes. Update Ollama. |
 | `ollama: web lookup unavailable (http 401)…` | Run `ollama signin`. |
 | `ollama: web lookup unavailable (http 403)…` | Ollama's cloud features are turned off (`OLLAMA_NO_CLOUD` or its settings). Turn them on to allow lookups. |
@@ -172,7 +178,7 @@ CG_AGENT_THEME=fable-protocol ./dist/CG-Agent-MacOS-Avatar.app/Contents/MacOS/cg
 | Bubble ends in `…` | The preview shows the first six wrapped lines (at most 400 characters) and collapses runs of blank lines. **See More** shows the whole reply. |
 | `harness error: …` | Harness returned an error Avatar has no specific message for; the text after the colon is the harness's own, clipped and sanitized. |
 | `Harness is finishing another reply…` | A previous chat turn is still running; wait a moment and send again. |
-| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit, and **Copy Reply** (⇧⌘C) copies the whole reply. A reply that would fill it is trimmed (ending in `…`) so the `[via web …]` note or the offer line is never the part that is cut. The 400-character preview can still hide the note; See More shows it. |
+| Long response appears cut off | Expand with See More, then scroll; the expanded display still has an 8,000-character limit, and **Copy Reply** (⇧⌘C) copies the whole reply. A Direct Ollama reply that ends with `[Reply stopped at Avatar's length limit…]` reached its 4,096-token limit; ask a narrower question. A reply that would fill it is trimmed (ending in `…`) so the `[via web …]` note or the offer line is never the part that is cut. The 400-character preview can still hide the note; See More shows it. |
 
 For fresh native examples, see the [README screenshots](../README.md) and
 [capture provenance](screenshots/README.md). For build errors, see

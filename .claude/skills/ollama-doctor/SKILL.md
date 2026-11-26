@@ -48,7 +48,8 @@ and check that `discover.rs` excludes `OLLAMA_PORT`.
 | The readiness check agrees with what chat sends | If `tags_ok` accepts a tag that `chat_body` won't request, "ready" can still end in `ollama http 404` |
 | Only `/v1/chat/completions`, `/api/tags`, and `/api/experimental/web_search`/`web_fetch` are reachable; never `/api/generate`, `/api/chat`, or `/api/pull` | `ALLOWED`, `ollama_relay_is_loopback_openai_compat_only`, `ollama_web_lookups_stay_on_the_loopback_daemon` |
 | No `tools`, `loop`, API key, proxy, or redirect-following | `chat_body` test `body_has_fixed_model_no_loop_no_tools`, the `.no_proxy()` and `redirect::Policy::none()` builder calls |
-| Every response is bounded by `MAX_BODY` | `response_bytes` → `http::read_bounded` |
+| Every response is bounded by `MAX_BODY` | `response_bytes` → `http::read_bounded`; the chat stream → `read_completion_stream` → `http::EventStream` |
+| A full reply fits the cap | `MAX_TOKENS` × bytes per streamed chunk < `MAX_BODY` (`a_full_length_reply_fits_under_the_response_cap`) |
 
 Run the module's own tests; they are fast and portable:
 
@@ -106,7 +107,9 @@ worker in `app.rs` (grep `BACKEND_OLLAMA`). Re-check them before quoting.
 | `ollama: web lookup unavailable (http N): <hint>` | `web_hint` in `ollama.rs`: 404 no web routes, 401 not signed in, 403 cloud features off, 429 upstream rate limit, 5xx the daemon couldn't reach ollama.com | `ollama --version`; the Ollama app's sign-in and cloud settings |
 | `ollama: can't read that link…` | `web_intent` refused a private, `.local`, single-label, or credentialed link | Expected; only public http(s) pages |
 | Creature looks unwell but chat works | `tags_ok` returned `Ok(false)` (the status loop), or chat succeeded despite a tag the readiness rule rejects | Compare `tags_ok` matching with the live tag list |
-| `ollama: response too large` | Reply over 1 MiB (`MAX_BODY`) | Expected behavior; this is not a bug |
+| `ollama: response too large` | The reply stream passed 1 MiB (`MAX_BODY`). `MAX_TOKENS` keeps a normal reply under it, so the daemon ignored `max_tokens` or framed tokens far larger than usual | Fail-closed by design; compare the daemon's bytes per chunk with `MAX_BODY` / `MAX_TOKENS` |
+| `ollama: ollama stopped before finishing that reply…` | The stream ended before `data: [DONE]` (`OllamaError::StreamInterrupted`): the runner died mid-reply or Ollama quit. A daemon error after the first token arrives as an empty chunk and then the end of the stream | The Ollama app's log; `ollama ps` |
+| Reply ends with `[Reply stopped at Avatar's length limit…]` | The final chunk's `finish_reason` was `length`: the model wrote `MAX_TOKENS` tokens | Expected; `display::with_length_note` |
 | Replies ignore the persona or mention missing files | The system prompt asks for tool actions (§3) | Read the prompt |
 
 ## 6. Web lookup setup (`$ARGUMENTS` = `web`)

@@ -87,7 +87,8 @@ layer that can hold it.
 - **`csrf.rs`**: extracts the console CSRF token from `GET /` HTML, validates its
   charset and length, and redacts it in `Debug` so it never reaches logs.
 - **`http.rs`**: bounded body reads (`MAX_BODY`, 1 MiB), shared by `client.rs`,
-  `discover.rs`, and `ollama.rs`.
+  `discover.rs`, and `ollama.rs`. `EventStream` reads a server-sent event stream
+  under that cap and one deadline; both streamed backends read through it.
 
 **Layer 2: backend I/O (blocking `reqwest`, no async runtime)**
 - **`tls.rs`**: installs `ring` as the process-wide rustls crypto provider, once.
@@ -126,6 +127,11 @@ layer that can hold it.
     top_p 0.8, presence_penalty 1.5), since Ollama's OpenAI route would otherwise
     think at "medium" and sample at 1.0. An explicit lookup phrase adds one search
     or page read, run through the local daemon and passed as untrusted text.
+  - `chat_stream` sets `stream: true` on the same route and reports the reply so
+    far as it arrives (whole stream under `MAX_BODY` and the chat timeout, no
+    partial reply on a stream that ends before `[DONE]`). `max_tokens` (4,096)
+    keeps a full reply's event framing under the cap; a reply stopped there is
+    kept with `display::with_length_note`.
 - **`web_intent.rs`** (pure): recognizes an explicit web lookup and refuses
   private or credentialed links before any network call. A search needs command
   evidence: a venue plus `for` ("search the web for …"), a colon ("google: …"),
@@ -142,7 +148,8 @@ layer that can hold it.
   `app.rs` persists them with `NSUserDefaults`; each queued message captures its style.
 - **`harness_setup.rs`**: typed Harness setup phases, advanced by a pinned loopback
   status response, login result, and required password change; generation checks
-  discard results from earlier backend selections. A cloud selection is ready only
+  discard results from earlier backend selections (`still_selected` is the check
+  a streamed reply makes, on either backend). A cloud selection is ready only
   with its key and the account's consent (`model_status`); `describe` builds the
   panel label that marks a cloud model.
 - **`mood.rs`**: pure `Mood` derivation (Asleep/Idle/Thinking/Talking/Sick) from
@@ -192,7 +199,7 @@ style checks. Read the relevant one before touching networking, process spawning
 
 | File | Locks down |
 |---|---|
-| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only; web lookups only via the loopback daemon (no cloud host, key, or tools); the pasteboard is written once, host-only, sanitized, and never read |
+| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only; web lookups only via the loopback daemon (no cloud host, key, or tools); streamed replies read only through `http::EventStream` under `MAX_BODY`; the pasteboard is written once, host-only, sanitized, and never read |
 | `tests/objections.rs` | SSRF baits rejected, CSRF injection shapes, session IDs shaped like paths, oversized bodies, token redaction in `Debug` |
 | `tests/lsof_argv.rs` | argv-only loopback `lsof`; Ollama and privileged ports skipped |
 | `tests/plist_contract.rs` | bundle identity key/value pairs, `LSUIElement` true (no Dock), ATS local networking true, macOS 13+ and Retina declarations |

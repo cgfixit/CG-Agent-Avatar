@@ -108,6 +108,48 @@ fn ollama_relay_is_loopback_openai_compat_only() {
     let v = cg_agent::ollama::chat_body_json("hi");
     assert_eq!(v["model"], "qwen3.8:27b-mlx");
     assert!(v.get("loop").is_none());
+    // The reply is streamed on that same route, with a token budget that
+    // keeps a full reply under the response cap.
+    assert_eq!(v["stream"], true);
+    assert_eq!(v["max_tokens"], 4096);
+}
+
+#[test]
+fn streamed_replies_are_read_only_through_the_capped_reader() {
+    for (name, src) in [
+        ("client.rs", include_str!("../src/client.rs")),
+        ("ollama.rs", include_str!("../src/ollama.rs")),
+    ] {
+        let prod = src.split("#[cfg(test)]").next().expect("prod");
+        // One reader per backend, bound to the response cap and the turn's
+        // deadline.
+        assert_eq!(
+            prod.matches("EventStream::new(reader, MAX_BODY, deadline)")
+                .count(),
+            1,
+            "{name}"
+        );
+        assert_eq!(prod.matches("EventStream::new(").count(), 1, "{name}");
+        // Nothing else in a streaming backend reads a body line by line or
+        // whole: every other read goes through `http::read_bounded`.
+        for unbounded in [
+            "BufReader",
+            ".lines()",
+            "read_line(",
+            "read_until(",
+            "read_to_string(",
+            "read_to_end(",
+            ".text()",
+            ".bytes()",
+            ".chunk()",
+            "copy_to(",
+        ] {
+            assert!(!prod.contains(unbounded), "{name} reads with {unbounded}");
+        }
+    }
+    // The cap itself is the one every other response has.
+    let http = include_str!("../src/http.rs");
+    assert!(http.contains("pub(crate) const MAX_BODY: u64 = 1_048_576;"));
 }
 
 #[test]

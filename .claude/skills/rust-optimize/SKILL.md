@@ -50,7 +50,8 @@ only. Say so when a change touches `app.rs`.
    reuse a client rather than building one per request or per port (`discover.rs`
    builds one per pass and re-points it).
 3. **Bounded response handling.** `http.rs` caps every response body at `MAX_BODY`
-   before it's parsed as text or JSON: CWE-400 mitigation documented in `SECURITY.md`,
+   before it's parsed as text or JSON (`read_bounded`, and `EventStream` for a
+   streamed reply): CWE-400 mitigation documented in `SECURITY.md`,
    not an arbitrary limit. Don't read a body before that cap, and don't raise the cap
    "for performance" without a separately justified decision.
 4. **Timeouts are asymmetric on purpose.** `client.rs` and `ollama.rs` set `GET_TIMEOUT`

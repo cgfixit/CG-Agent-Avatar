@@ -61,8 +61,8 @@ struct Shared {
     pending_login: Mutex<Option<(u64, String, String)>>,
     pending_password_change: Mutex<Option<(u64, String, String)>>,
     in_flight: AtomicBool,
-    /// A pending Harness reply has text to show, so `last_reply` holds the
-    /// reply so far instead of the previous answer.
+    /// A pending reply has text to show, so `last_reply` holds the reply so
+    /// far instead of the previous answer.
     streaming: AtomicBool,
     talking: AtomicBool,
     click: AtomicBool,
@@ -76,6 +76,28 @@ struct Shared {
     jar: Arc<SessionJar>,
     /// Set after login or a password change to re-check status right away.
     repoll: AtomicBool,
+}
+
+impl Shared {
+    fn new() -> Self {
+        Self {
+            mood: Mutex::new(Mood::Asleep),
+            last_reply: Mutex::new(String::new()),
+            last_answer: Mutex::new(String::new()),
+            pending: Mutex::new(None),
+            pending_login: Mutex::new(None),
+            pending_password_change: Mutex::new(None),
+            in_flight: AtomicBool::new(false),
+            streaming: AtomicBool::new(false),
+            talking: AtomicBool::new(false),
+            click: AtomicBool::new(false),
+            backend: AtomicU8::new(DEFAULT_BACKEND),
+            guide: Mutex::new(Guide::default()),
+            harness_detail: Mutex::new(None),
+            jar: Arc::default(),
+            repoll: AtomicBool::new(false),
+        }
+    }
 }
 
 struct PendingChat {
@@ -1896,9 +1918,9 @@ fn expanded_reply_heights(text: &str, metrics: &theme::Metrics) -> (f64, f64) {
 /// re-rendered whole, so every delta would be wasted work.
 const STREAM_REDRAW: Duration = Duration::from_millis(60);
 
-/// Shows one step of a streamed Harness reply, unless the user has since
-/// picked another backend: then the turn is stopped, which closes the
-/// connection and makes Harness abort it. The backend selection is checked
+/// Shows one step of a streamed reply, unless the user has since picked
+/// another backend: then the turn is stopped, which closes the connection
+/// and makes Harness or Ollama abort it. The backend selection is checked
 /// and the bubble written under the guide lock, so a late event can never
 /// overwrite the note a new selection just put there.
 fn stream_event(
@@ -1909,7 +1931,9 @@ fn stream_event(
     event: ChatEvent<'_>,
 ) -> Flow {
     let guide = shared.guide.lock().unwrap();
-    if shared.backend.load(Ordering::SeqCst) != backend || !guide.current(generation) {
+    if shared.backend.load(Ordering::SeqCst) != backend
+        || !guide.still_selected(generation, backend == BACKEND_HARNESS)
+    {
         return Flow::Stop;
     }
     let text = match event {
@@ -2136,14 +2160,24 @@ fn spawn_workers(shared: Arc<Shared>) {
                         talking_deadline = None;
                         shared.talking.store(false, Ordering::SeqCst);
                         if backend == BACKEND_OLLAMA {
+                            let mut shown = None::<Instant>;
                             let result = ollama
                                 .as_ref()
                                 .ok_or(OllamaError::Unreachable)
-                                .and_then(|o| o.chat_with_style(&message, style, &custom_style));
+                                .and_then(|o| {
+                                    o.chat_stream(&message, style, &custom_style, &mut |text| {
+                                        stream_event(&shared, backend, generation, &mut shown, ChatEvent::Text(text))
+                                    })
+                                });
+                            // Held while the result is written, like the
+                            // Harness branch: a selection made meanwhile
+                            // either lands first and is seen here, or waits.
+                            let guide = shared.guide.lock().unwrap();
                             if shared.backend.load(Ordering::SeqCst) != backend
-                                || shared.guide.lock().unwrap().generation() != generation
+                                || !guide.still_selected(generation, false)
                             {
                                 shared.in_flight.store(false, Ordering::SeqCst);
+                                shared.streaming.store(false, Ordering::SeqCst);
                                 continue;
                             }
                             match result {
@@ -2266,23 +2300,7 @@ fn spawn_workers(shared: Arc<Shared>) {
 }
 
 pub fn run() {
-    let shared = Arc::new(Shared {
-        mood: Mutex::new(Mood::Asleep),
-        last_reply: Mutex::new(String::new()),
-        last_answer: Mutex::new(String::new()),
-        pending: Mutex::new(None),
-        pending_login: Mutex::new(None),
-        pending_password_change: Mutex::new(None),
-        in_flight: AtomicBool::new(false),
-        streaming: AtomicBool::new(false),
-        talking: AtomicBool::new(false),
-        click: AtomicBool::new(false),
-        backend: AtomicU8::new(DEFAULT_BACKEND),
-        guide: Mutex::new(Guide::default()),
-        harness_detail: Mutex::new(None),
-        jar: Arc::default(),
-        repoll: AtomicBool::new(false),
-    });
+    let shared = Arc::new(Shared::new());
     spawn_workers(Arc::clone(&shared));
 
     let mtm = MainThreadMarker::new().expect("GUI on main thread");
@@ -2373,6 +2391,59 @@ a+VhHbrWdvoCoROeKF3msYiqjFE=
         )
         .unwrap();
         assert_eq!(client.origin().as_str(), "https://[::1]:8790");
+    }
+
+    #[test]
+    fn a_streamed_reply_reaches_the_bubble_until_another_backend_is_picked() {
+        let shared = Shared::new();
+        let shown_text = || shared.last_reply.lock().unwrap().clone();
+        let generation = shared.guide.lock().unwrap().generation();
+        let mut shown = None;
+        let step = |shown: &mut Option<Instant>, text| {
+            stream_event(
+                &shared,
+                BACKEND_OLLAMA,
+                generation,
+                shown,
+                ChatEvent::Text(text),
+            )
+        };
+        // Direct Ollama, the launch default, streams into the bubble.
+        assert_eq!(step(&mut shown, "Hel"), Flow::Continue);
+        assert_eq!(shown_text(), "Hel");
+        assert!(shared.streaming.load(Ordering::SeqCst));
+        // Inside the redraw interval the read goes on without a redraw.
+        assert_eq!(step(&mut shown, "Hell"), Flow::Continue);
+        assert_eq!(shown_text(), "Hel");
+        shown = Some(Instant::now() - STREAM_REDRAW);
+        assert_eq!(step(&mut shown, "Hello"), Flow::Continue);
+        assert_eq!(shown_text(), "Hello");
+        // Picking Harness stops the turn and keeps that selection's note.
+        shared.guide.lock().unwrap().select(true);
+        shared.backend.store(BACKEND_HARNESS, Ordering::SeqCst);
+        *shared.last_reply.lock().unwrap() = "note".into();
+        assert_eq!(step(&mut None, "Hello!"), Flow::Stop);
+        assert_eq!(shown_text(), "note");
+        // A Harness stream under the new selection is live; the old
+        // selection's generation is not, on either backend.
+        let harness = shared.guide.lock().unwrap().generation();
+        let harness_step = |generation, text| {
+            stream_event(
+                &shared,
+                BACKEND_HARNESS,
+                generation,
+                &mut None,
+                ChatEvent::Text(text),
+            )
+        };
+        assert_eq!(harness_step(generation, "stale"), Flow::Stop);
+        assert_eq!(harness_step(harness, "hi"), Flow::Continue);
+        assert_eq!(shown_text(), "hi");
+        // Back to Direct Ollama: the Harness stream stops in turn.
+        shared.guide.lock().unwrap().select(false);
+        shared.backend.store(BACKEND_OLLAMA, Ordering::SeqCst);
+        assert_eq!(harness_step(harness, "late"), Flow::Stop);
+        assert_eq!(shown_text(), "hi");
     }
 
     #[test]
