@@ -108,5 +108,6 @@ through `display.rs` before it reaches the screen.
    doc map. `/docs-sync --check` lists what drifted.
 3. If the change touches networking, auth, discovery, `Info.plist`, or workflows, run
    `/check-security-invariants` before pushing.
-4. If you touched `app.rs`, say in the PR that Linux could not compile it, and don't
-   claim macOS CI passed until it has.
+4. If you touched `app.rs` on Linux, run `./scripts/check-macos.sh` to type-check and
+   Clippy-lint it for the macOS target. Say in the PR that it was only checked, not
+   linked or tested, and don't claim macOS CI passed until it has.

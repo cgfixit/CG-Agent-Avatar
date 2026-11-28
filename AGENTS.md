@@ -27,6 +27,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --test source_contracts       # one integration test file
 cargo test --locked some_test_name                # one test by name
 cargo deny --locked check                         # advisories/licenses/sources; config in deny.toml
+./scripts/check-macos.sh                          # Linux only: Clippy for aarch64-apple-darwin (needs clang)
 ./scripts/package-app.sh                          # macOS only: dist/CG-Agent-MacOS-Avatar.app (ad-hoc signed)
 ```
 
@@ -40,10 +41,15 @@ cargo deny --locked check                         # advisories/licenses/sources;
 
 **Platform caveat.** The binary is macOS-only (`main()` exits 2 elsewhere). On
 Linux, which includes Claude Code on the web and Codex cloud, `src/app.rs` and the
-`NSWorkspace` path in `launch.rs` are compiled out: the Linux gate covers every
-portable module and contract test but **cannot prove that an AppKit change
-compiles**. Say so in any PR that touches `app.rs`, and never claim macOS CI passed
-until it has.
+`NSWorkspace` path in `launch.rs` are compiled out of the host gate.
+`./scripts/check-macos.sh` closes part of that gap: it runs Clippy with
+`-D warnings` on every target for `aarch64-apple-darwin`, so the macOS-only code
+(tests included) is type-checked, borrow-checked, and linted. Nothing is linked,
+because there is no macOS SDK; it satisfies `ring`'s C build with clang and stub
+headers, and those objects are unusable, so the script never builds or tests. It
+therefore **cannot prove that an AppKit change links, runs, or behaves
+correctly**, and the macOS unit tests do not run. Say so in any PR that touches
+`app.rs`, and never claim macOS CI passed until it has.
 
 ## Local verification
 
@@ -55,6 +61,9 @@ until it has.
   execution cannot cover a concrete risk; explain that reason. This rule takes
   precedence over broader local-suite instructions in repository skills.
 - Prefer formatting, linting, type checks, and targeted builds where appropriate.
+  On Linux, a change to `app.rs` or `launch.rs`'s macOS path also gets
+  `./scripts/check-macos.sh`; report it as a macOS-target Clippy pass, not as
+  macOS compilation or test results.
   For GitHub Actions changes, lint the workflows and inspect the scripts they
   invoke. Leave broad regression and platform coverage to GitHub Actions.
 - Preserve and update relevant regression tests for hosted CI. Report direct

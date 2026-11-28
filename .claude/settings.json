@@ -3,6 +3,7 @@
   "permissions": {
     "allow": [
       "Bash(./scripts/ci.sh)",
+      "Bash(./scripts/check-macos.sh)",
       "Bash(cargo fmt:*)",
       "Bash(cargo clippy:*)",
       "Bash(cargo test:*)",
