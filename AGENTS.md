@@ -155,6 +155,9 @@ layer that can hold it.
 - **`draft.rs`**: `Unanswered`, the in-memory slot that carries an unanswered
   message from the chat worker back to the blank chat field, so Return retries
   it. A draft typed meanwhile always wins; the slot never persists or resends.
+- **`turn.rs`**: `Turns` numbers chat turns so **Stop** reaches only the reply in
+  flight; the worker checks it in each stream callback and drops the
+  connection (no cancel route).
 - **`mood.rs`**: pure `Mood` derivation (Asleep/Idle/Thinking/Talking/Sick) from
   backend status and in-flight chat state.
 - **`theme.rs`**: design tokens (layout, motion, color, type). `CLASSIC` is the
@@ -202,7 +205,7 @@ style checks. Read the relevant one before touching networking, process spawning
 
 | File | Locks down |
 |---|---|
-| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only; web lookups only via the loopback daemon (no cloud host, key, or tools); streamed replies read only through `http::EventStream` under `MAX_BODY`; the pasteboard is written once, host-only, sanitized, and never read; an unanswered message stays in memory and returns only to the chat field |
+| `tests/source_contracts.rs` | no agent routes or `loop` field in `client.rs`; no forwarding headers; no dotenv in `home.rs`; `FORBIDDEN` unreachable; discovery never scans or touches the focus socket; launch by bundle ID only; Ollama loopback, OpenAI-compatible only; web lookups only via the loopback daemon (no cloud host, key, or tools); streamed replies read only through `http::EventStream` under `MAX_BODY`; the pasteboard is written once, host-only, sanitized, and never read; an unanswered message stays in memory and returns only to the chat field; Stop only drops the stream, per turn, with no cancel route |
 | `tests/objections.rs` | SSRF baits rejected, CSRF injection shapes, session IDs shaped like paths, oversized bodies, token redaction in `Debug` |
 | `tests/lsof_argv.rs` | argv-only loopback `lsof`; Ollama and privileged ports skipped |
 | `tests/plist_contract.rs` | bundle identity key/value pairs, `LSUIElement` true (no Dock), ATS local networking true, macOS 13+ and Retina declarations |

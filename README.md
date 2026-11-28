@@ -11,6 +11,8 @@ resting, thinking, talking, or needs attention.
   **Send**, and close it without losing your draft or the reply.
 - **Watch the answer arrive.** Replies appear as they are written, from a local
   Ollama and from Harness alike, instead of after a long `…thinking`.
+- **Stop when you've read enough.** **Stop** (or **⌘.**) ends a reply that's
+  going the wrong way; what arrived stays on screen.
 - **Never retype a question.** If a reply doesn't arrive (a timeout, a broken
   stream, a busy backend, a login prompt, a backend switch), your message goes
   back in the field. Press Return to try again.
@@ -127,8 +129,18 @@ Illustrations with synthetic sample data, rendered from the app's theme tokens.
 Click the creature or choose **Talk** from its menu-bar menu. The panel stays in
 place while you type and read. **Return** or **Send** submits your message, and
 `…thinking` stays up until the reply starts, then the reply appears as it is
-written, from either backend. Picking the other backend mid-reply stops it. You
-can write a draft even when the backend is unavailable.
+written, from either backend. You can write a draft even when the backend is
+unavailable.
+
+While a reply is pending, **Send** becomes **Stop**; **Stop Reply** (**⌘.**) in
+the menus does the same. A message still waiting its turn comes straight back
+to the field. A reply in progress ends at the next piece the backend sends:
+Avatar closes the connection, so Ollama stops generating and Harness abandons
+the turn. What arrived stays on screen, ending with `[You stopped this reply
+here.]`, and **Copy Reply** copies it. Before the first words (a model still
+loading, or a web lookup already sent) there is nothing to cut in on, so Stop
+greys out until they arrive. **Return** in the field never stops a reply, so
+typing ahead is safe. Picking the other backend mid-reply also stops it.
 
 Send clears the field. If the turn then ends without an answer, the message
 goes back in the field and the bubble says why, so **Return** sends it again
@@ -153,7 +165,7 @@ after trimming, which is a character limit, not a model-context guarantee.
 puts the finished reply on the clipboard: all of it, not just the 8,000 characters
 the pane shows, and stripped of the same terminal escapes, bidi overrides, and
 other invisible controls the bubble hides. Tabs and line breaks stay, so code
-keeps its indentation, and any `[via web: …]` note stays with the text. It is
+keeps its indentation, and any `[via web: …]` note stays with the text. A reply you stopped counts as finished. It is
 unavailable while a reply is pending or when the bubble shows a status message
 instead of an answer. The copy stays on this Mac (Universal Clipboard does not
 sync it), and Avatar never reads the clipboard.

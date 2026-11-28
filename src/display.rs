@@ -240,9 +240,40 @@ pub fn with_length_note(reply: &str) -> String {
     )
 }
 
+/// Shown when **Stop** ends a turn before any of the reply arrived.
+pub const STOPPED_BEFORE_REPLY: &str = "Stopped before the reply started.";
+
+/// The reply so far when the user pressed **Stop**, marked as stopped, or
+/// `None` when nothing visible arrived. The note is a footer, so a long
+/// partial loses its own tail, never the note.
+pub fn stopped_reply(partial: &str) -> Option<String> {
+    if sanitized_text(partial, usize::MAX).trim().is_empty() {
+        return None;
+    }
+    Some(append_footer(
+        partial.trim_end(),
+        "\n\n[You stopped this reply here.]",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stopped_reply_marks_the_partial_and_survives_a_long_or_hostile_one() {
+        assert_eq!(
+            stopped_reply("The fix is to  \n").as_deref(),
+            Some("The fix is to\n\n[You stopped this reply here.]")
+        );
+        for empty in ["", "  \n", "\u{1b}[2J"] {
+            assert_eq!(stopped_reply(empty), None, "{empty:?}");
+        }
+        let long = "x".repeat(MAX_EXPANDED_CHARS + 50);
+        let noted = expanded_text(&stopped_reply(&format!("{long}\u{1b}]")).unwrap());
+        assert!(noted.ends_with("[You stopped this reply here.]"), "{noted}");
+        assert!(noted.chars().count() <= MAX_EXPANDED_CHARS);
+    }
 
     #[test]
     fn length_note_survives_an_unterminated_escape_and_keeps_the_whole_reply() {

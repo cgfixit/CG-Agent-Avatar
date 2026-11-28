@@ -5,7 +5,8 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | Input | Action |
 |---|---|
 | **Talk** | Show the strip, focus the text field (works offline) |
-| **Copy Reply** in the menu / **⇧⌘C** while chat is active | Copy the whole finished reply as plain text: past the 8,000-character view, without escape sequences, bidi overrides, or other hidden controls; tabs, line breaks, and any `[via web: …]` note kept. Unavailable while a reply is pending or the bubble shows a status message. The copy is current-host-only, so Universal Clipboard does not send it to your other devices |
+| **Stop** in the toolbar / **Stop Reply** in the menu / **⌘.** while chat is active | Available while a reply is pending (Send turns into Stop). A message still queued returns to the field at once. A reply in progress ends at the next piece the backend sends: the connection closes, Ollama stops generating, and Harness abandons the turn. Before the first words arrive, Stop greys out until then. What arrived stays on screen, ending with `[You stopped this reply here.]`; with nothing yet, the bubble says `Stopped before the reply started.` Either way your message goes back in the field, unless you typed a new draft meanwhile. Return in the field never stops a reply |
+| **Copy Reply** in the menu / **⇧⌘C** while chat is active | Copy the whole finished reply as plain text: past the 8,000-character view, without escape sequences, bidi overrides, or other hidden controls; tabs, line breaks, and any `[via web: …]` note kept. A stopped reply counts as finished, its note included. Unavailable while a reply is pending or the bubble shows a status message. The copy is current-host-only, so Universal Clipboard does not send it to your other devices |
 | **Harness (127.0.0.1:8790)** | Optional. Launches or activates the installed `CG Agent Harness.app` by bundle identifier, then checks the configured port and desktop sidecar for a confirmed status response; HTTPS with a pinned certificate on fresh homes, plain HTTP only on legacy homes with no `tls/server.pem` |
 | **Direct Ollama (qwen3.8:27b-mlx)** | Default. Sends the bundled Soul prompt as a system message via `http://127.0.0.1:11434/v1/chat/completions` |
 | **Harness Login…** | Prompts for a harness account username and password (native secure text entry), then logs in for later Harness chats |
@@ -15,7 +16,7 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 | **Settings…** in the toolbar or menu / **⌘,** while Avatar is active | Open the native settings window for output style and three macOS preferences |
 | **Quit CG-Agent-MacOS-Avatar** | Terminate |
 | Click the creature | Same as Talk |
-| Type, Return or **Send** | Send. Reply appears in the bubble **above** the avatar; while a request is busy, the next draft stays in the field |
+| Type, Return or **Send** | Send. Reply appears in the bubble **above** the avatar; while a request is busy, Return leaves the next draft in the field and the button reads **Stop** |
 | A turn ends without an answer | The message you sent goes back in the field (it was cleared on Send) and the bubble shows the reason; press Return to send it again. Applies to every error below, to Harness login or setup prompts, and to switching backends mid-reply. If you typed a new draft while waiting, that draft stays and the old message is dropped. Nothing is resent on its own |
 | **Close** | Hide the chat and let the creature roam again; reopening preserves the draft, reply, and expansion state |
 | `search the web for …`, `please look up …`, `google: …` | Direct Ollama runs one web search first, then answers from the results. See [Web lookups](#web-lookups-direct-ollama) |
@@ -40,11 +41,12 @@ Left-click the menu-bar icon (top toolbar). Typing does **not** require Harness 
 While a turn is in flight the bubble says `…thinking`. The reply then appears
 as it is written, from either backend, and the creature talks while it arrives;
 the finished reply replaces the preview. A Direct Ollama web lookup runs before
-the first words, so `…thinking` covers it. Choosing another backend mid-reply
-stops the turn: Avatar closes the connection, and Harness or Ollama stops
-generating.
-The Send button is unavailable while a message is queued or being answered;
-you can keep typing the next draft. The panel identifies the selected backend
+the first words, so `…thinking` covers it. **Stop**, or choosing another backend
+mid-reply, ends the turn: Avatar closes the connection, and Harness or Ollama
+stops generating.
+While a message is queued or being answered the Send button reads **Stop**;
+you can keep typing the next draft, and Return will not send it until the
+reply ends. The panel identifies the selected backend
 and, for Harness, the model it reports and whether that model is a cloud one.
 Direct Ollama sends only the current message plus the bundled system prompt and selected output style,
 and the results of one lookup when you ask for one. It asks for a direct answer

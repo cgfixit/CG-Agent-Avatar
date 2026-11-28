@@ -17,6 +17,7 @@ pub mod paths;
 pub mod settings;
 pub mod theme;
 pub mod tls;
+pub mod turn;
 pub mod validate;
 pub mod web_intent;
 
