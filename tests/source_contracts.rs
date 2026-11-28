@@ -256,3 +256,30 @@ fn unanswered_message_stays_in_memory_and_returns_only_to_the_field() {
     slot.hold("old".into());
     assert_eq!(slot.restore(|| "new draft".into()), None);
 }
+
+#[test]
+fn stop_only_drops_the_stream_and_reaches_only_its_turn() {
+    let app = include_str!("../src/app.rs");
+    let prod = app.split("#[cfg(test)]").next().expect("prod");
+    // Stop ends a turn by refusing the next piece of the reply, which drops
+    // the connection; it never calls Harness's cancel route.
+    assert!(cg_agent::paths::FORBIDDEN.contains(&"/api/chat/cancel"));
+    for src in [prod, include_str!("../src/client.rs")] {
+        assert!(!src.contains("chat/cancel"));
+    }
+    // Both backends' stream callbacks check this turn's stop request.
+    assert_eq!(
+        prod.matches("if shared.turns.stop_requested(turn) {\n")
+            .count(),
+        2
+    );
+    // The turn is numbered under the queue lock that Stop also takes.
+    assert!(prod.contains("shared.in_flight.store(true, Ordering::SeqCst);\n                            shared.turns.begin()"));
+    // Return in the field only ever sends; the button alone switches to Stop.
+    assert!(prod.contains("f.setAction(Some(sel!(sendChat:)));"));
+    let turns = cg_agent::turn::Turns::default();
+    let first = turns.begin();
+    turns.request_stop();
+    assert!(!turns.stop_requested(turns.begin()));
+    assert!(turns.stop_requested(first));
+}

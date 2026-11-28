@@ -37,6 +37,7 @@ use crate::ollama::{self, Ollama, OllamaError};
 use crate::origin::LoopbackOrigin;
 use crate::settings::{OutputStyle, Settings};
 use crate::theme;
+use crate::turn::Turns;
 use crate::validate;
 
 const PNG: &[u8] = include_bytes!("../assets/creature.png");
@@ -62,6 +63,8 @@ struct Shared {
     /// The message of a turn that ended without an answer, on its way back
     /// to the chat field so Return can send it again.
     unanswered: Unanswered,
+    /// Numbers chat turns so **Stop** reaches only the reply in flight.
+    turns: Turns,
     pending_login: Mutex<Option<(u64, String, String)>>,
     pending_password_change: Mutex<Option<(u64, String, String)>>,
     in_flight: AtomicBool,
@@ -90,6 +93,7 @@ impl Shared {
             last_answer: Mutex::new(String::new()),
             pending: Mutex::new(None),
             unanswered: Unanswered::default(),
+            turns: Turns::default(),
             pending_login: Mutex::new(None),
             pending_password_change: Mutex::new(None),
             in_flight: AtomicBool::new(false),
@@ -316,7 +320,11 @@ define_class!(
         // Every other Delegate item stays enabled, as before.
         #[unsafe(method(validateMenuItem:))]
         fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
-            item.action() != Some(sel!(copyReply:)) || self.copyable_reply().is_some()
+            match item.action() {
+                Some(action) if action == sel!(copyReply:) => self.copyable_reply().is_some(),
+                Some(action) if action == sel!(stopReply:) => self.stoppable(),
+                _ => true,
+            }
         }
     }
 
@@ -343,6 +351,11 @@ define_class!(
         #[unsafe(method(copyReply:))]
         fn copy_reply_action(&self, _sender: Option<&AnyObject>) {
             self.copy_reply();
+        }
+
+        #[unsafe(method(stopReply:))]
+        fn stop_reply_action(&self, _sender: Option<&AnyObject>) {
+            self.stop_reply();
         }
 
         #[unsafe(method(useHarness:))]
@@ -682,6 +695,43 @@ impl Delegate {
         });
     }
 
+    /// **Stop Reply** (⌘.), for both the status menu and the Edit menu.
+    fn stop_reply_item(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+        let item = Self::menu_item(mtm, ns_string!("Stop Reply"), sel!(stopReply:));
+        item.setKeyEquivalent(ns_string!("."));
+        item.setToolTip(Some(ns_string!(
+            "Stop the reply in progress; what arrived so far stays on screen"
+        )));
+        item
+    }
+
+    /// A reply is queued or being answered, and no stop is pending for it.
+    fn stoppable(&self) -> bool {
+        let shared = &self.ivars().shared;
+        let pending = shared.pending.lock().unwrap();
+        pending.is_some() || (shared.in_flight.load(Ordering::SeqCst) && !shared.turns.stopping())
+    }
+
+    /// A queued message comes straight back to the field. A turn in flight
+    /// ends at the backend's next piece of the reply, when the worker drops
+    /// the connection; until then Stop stays disabled.
+    fn stop_reply(&self) {
+        let shared = &self.ivars().shared;
+        let queued = {
+            let mut pending = shared.pending.lock().unwrap();
+            let queued = pending.take();
+            if queued.is_none() && shared.in_flight.load(Ordering::SeqCst) {
+                shared.turns.request_stop();
+            }
+            queued
+        };
+        if let Some(queued) = queued {
+            shared.unanswered.hold(queued.message);
+            *shared.last_reply.lock().unwrap() = display::STOPPED_BEFORE_REPLY.into();
+        }
+        self.on_tick();
+    }
+
     fn setup(&self) {
         let active = theme::active();
         let theme::Metrics {
@@ -710,6 +760,7 @@ impl Delegate {
         let menu = NSMenu::new(mtm);
         let talk = Self::menu_item(mtm, ns_string!("Talk"), sel!(talk:));
         let copy_reply = Self::copy_reply_item(mtm);
+        let stop_reply = Self::stop_reply_item(mtm);
         let harness = Self::menu_item(
             mtm,
             ns_string!("Harness (127.0.0.1:8790)"),
@@ -732,6 +783,7 @@ impl Delegate {
             open_harness.setTarget(Some(self.as_ref()));
             talk.setTarget(Some(self.as_ref()));
             copy_reply.setTarget(Some(self.as_ref()));
+            stop_reply.setTarget(Some(self.as_ref()));
             harness.setTarget(Some(self.as_ref()));
             ollama.setTarget(Some(self.as_ref()));
             login.setTarget(Some(self.as_ref()));
@@ -742,6 +794,7 @@ impl Delegate {
         ollama.setState(NSControlStateValueOn);
         menu.addItem(&talk);
         menu.addItem(&copy_reply);
+        menu.addItem(&stop_reply);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         menu.addItem(&harness);
         menu.addItem(&ollama);
@@ -813,11 +866,14 @@ impl Delegate {
                 // Status-menu key equivalents never fire, so ⇧⌘C lives here
                 // too, where it works while the chat panel is key.
                 let entry = Self::copy_reply_item(mtm);
+                let stop = Self::stop_reply_item(mtm);
                 unsafe {
                     entry.setTarget(Some(self.as_ref()));
+                    stop.setTarget(Some(self.as_ref()));
                 }
                 submenu.addItem(&NSMenuItem::separatorItem(mtm));
                 submenu.addItem(&entry);
+                submenu.addItem(&stop);
             }
             root.setSubmenu(Some(&submenu));
             main_menu.addItem(&root);
@@ -1651,7 +1707,42 @@ impl Delegate {
         }
         if let Some(send) = self.ivars().send.borrow().as_ref() {
             send.setHidden(!bubble_on);
-            send.setEnabled(!in_flight);
+            // While a reply is pending the button stops it; Return in the
+            // field still only sends, so typing ahead never stops a reply.
+            let stopping = self.ivars().shared.in_flight.load(Ordering::SeqCst)
+                && self.ivars().shared.turns.stopping();
+            send.setEnabled(!stopping);
+            let (title, action, tip) = if !in_flight {
+                (
+                    ns_string!("Send"),
+                    sel!(sendChat:),
+                    ns_string!("Send message (Return)"),
+                )
+            } else if stopping {
+                (
+                    ns_string!("Stop"),
+                    sel!(stopReply:),
+                    ns_string!("Stopping at the backend's next piece of the reply"),
+                )
+            } else {
+                (
+                    ns_string!("Stop"),
+                    sel!(stopReply:),
+                    ns_string!("Stop this reply (⌘.)"),
+                )
+            };
+            if !send.title().isEqualToString(title) || send.action() != Some(action) {
+                send.setTitle(title);
+                unsafe {
+                    send.setAction(Some(action));
+                }
+            }
+            if send
+                .toolTip()
+                .is_none_or(|current| !current.isEqualToString(tip))
+            {
+                send.setToolTip(Some(tip));
+            }
         }
         if let Some(close) = self.ivars().close.borrow().as_ref() {
             close.setHidden(!bubble_on);
@@ -1968,6 +2059,20 @@ fn stream_event(
     Flow::Continue
 }
 
+/// After **Stop**: what arrived stays on screen, marked, and can be copied;
+/// the message is already on its way back to the field.
+fn keep_stopped_reply(shared: &Shared, partial: &str) {
+    match display::stopped_reply(partial) {
+        Some(text) => {
+            *shared.last_answer.lock().unwrap() = text.clone();
+            *shared.last_reply.lock().unwrap() = text;
+        }
+        None => {
+            *shared.last_reply.lock().unwrap() = display::STOPPED_BEFORE_REPLY.into();
+        }
+    }
+}
+
 // ponytail: auth waits delay expiry; use the status worker if strict timing is needed.
 fn expire_talking(deadline: &mut Option<Instant>, talking: &AtomicBool, now: Instant) {
     if deadline.is_some_and(|at| now >= at) {
@@ -2146,15 +2251,19 @@ fn spawn_workers(shared: Arc<Shared>) {
                         }
                     }
 
-                    let msg = {
+                    let (msg, turn) = {
                         let mut pending = shared.pending.lock().unwrap();
                         let msg = pending.take();
                         // Publish busy before releasing the queue lock: Return and
-                        // Send must never slip a second message into this handoff.
-                        if msg.is_some() {
+                        // Send must never slip a second message into this handoff,
+                        // and Stop sees either the queued message or this turn.
+                        let turn = if msg.is_some() {
                             shared.in_flight.store(true, Ordering::SeqCst);
-                        }
-                        msg
+                            shared.turns.begin()
+                        } else {
+                            0
+                        };
+                        (msg, turn)
                     };
                     if let Some(PendingChat { backend, generation, message, style, custom_style }) = msg {
                         if shared.backend.load(Ordering::SeqCst) != backend
@@ -2180,11 +2289,17 @@ fn spawn_workers(shared: Arc<Shared>) {
                         shared.talking.store(false, Ordering::SeqCst);
                         if backend == BACKEND_OLLAMA {
                             let mut shown = None::<Instant>;
+                            let mut partial = String::new();
                             let result = ollama
                                 .as_ref()
                                 .ok_or(OllamaError::Unreachable)
                                 .and_then(|o| {
                                     o.chat_stream(&message, style, &custom_style, &mut |text| {
+                                        partial.clear();
+                                        partial.push_str(text);
+                                        if shared.turns.stop_requested(turn) {
+                                            return Flow::Stop;
+                                        }
                                         stream_event(&shared, backend, generation, &mut shown, ChatEvent::Text(text))
                                     })
                                 });
@@ -2217,11 +2332,15 @@ fn spawn_workers(shared: Arc<Shared>) {
                                     *shared.last_reply.lock().unwrap() =
                                         "pull qwen3.8:27b-mlx".into();
                                 }
+                                Err(OllamaError::Cancelled) if shared.turns.stop_requested(turn) => {
+                                    keep_stopped_reply(&shared, &partial);
+                                }
                                 Err(e) => {
                                     *shared.last_reply.lock().unwrap() = format!("ollama: {e}");
                                 }
                             }
                         } else {
+                            let mut partial = String::new();
                             let result = (|| {
                                 let endpoint = endpoint.unwrap();
                                 if last_endpoint != Some(endpoint) || harness.is_none() {
@@ -2236,6 +2355,13 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 }
                                 let mut shown = None::<Instant>;
                                 let mut on_event = |event: ChatEvent<'_>| {
+                                    if let ChatEvent::Text(text) = &event {
+                                        partial.clear();
+                                        partial.push_str(text);
+                                    }
+                                    if shared.turns.stop_requested(turn) {
+                                        return Flow::Stop;
+                                    }
                                     stream_event(&shared, backend, generation, &mut shown, event)
                                 };
                                 match client.chat_stream(session.as_deref().unwrap(), &message, &mut on_event) {
@@ -2303,6 +2429,9 @@ fn spawn_workers(shared: Arc<Shared>) {
                                 }
                                 Err(ClientError::Unreachable) => {
                                     *shared.last_reply.lock().unwrap() = "harness asleep".into();
+                                }
+                                Err(ClientError::Cancelled) if shared.turns.stop_requested(turn) => {
+                                    keep_stopped_reply(&shared, &partial);
                                 }
                                 Err(ClientError::StreamInterrupted) => {
                                     *shared.last_reply.lock().unwrap() =
