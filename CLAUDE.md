@@ -23,8 +23,10 @@ The project's rules, architecture, commands, and contract-test map live in
   session starts, then warms the crate cache and test build in the background
   (log: `$CARGO_WARM_LOG`). A first `cargo` command that prints
   `Blocking waiting for file lock` is waiting on that warm-up, not hanging.
-- **Linux vs macOS.** Web sessions run Linux, so `app.rs` is not compiled; say so
-  whenever you report a green local gate for an AppKit change.
+- **Linux vs macOS.** Web sessions run Linux, so the host gate does not compile
+  `app.rs`. Run `./scripts/check-macos.sh` (pre-approved) for an AppKit change: it
+  type-checks and Clippy-lints the macOS target but links and tests nothing. Say
+  that whenever you report a green local gate for an AppKit change.
 - **Editing these files.** Shared facts go in `AGENTS.md`; only Claude-specific
   wiring belongs here (`/docs-sync` keeps both current).
 - **Verify before asserting.** Treat doc claims (versions, routes, test names) as

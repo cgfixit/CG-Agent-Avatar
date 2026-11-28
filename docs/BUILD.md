@@ -58,10 +58,25 @@ verifier also runs locally on Apple Silicon macOS without launching the app.
 For a local change, run the affected command or test target; leave the full
 regression matrix to hosted CI. `./scripts/ci.sh` is available for an explicitly
 requested full run of formatting, Clippy with warnings denied, and all test
-targets. On Linux, including Claude Code on the web and Codex cloud, the same
-script covers the portable modules and every contract test, but `src/app.rs` is
-compiled only on macOS. AppKit changes therefore need the macOS CI jobs. If `cargo-deny` is installed, it also checks dependency advisories,
+targets. If `cargo-deny` is installed, it also checks dependency advisories,
 licenses, sources, and version policy; otherwise it prints an explicit skip.
+
+On Linux, including Claude Code on the web and Codex cloud, `ci.sh` covers the
+portable modules and every contract test, but `src/app.rs` and the `NSWorkspace`
+path in `src/launch.rs` are compiled only for macOS. `./scripts/check-macos.sh`
+lints that code from Linux: it adds the `aarch64-apple-darwin` target if needed
+and runs `cargo clippy --locked --all-targets --all-features -- -D warnings` for
+it, in `target/check-macos`. It needs `clang` and `ar` but no macOS SDK, because
+nothing is linked. `ring`'s build script still compiles C for the target, so the
+script writes stub `string.h`, `assert.h`, `stdlib.h`, and `TargetConditionals.h`
+headers to a temp directory. The resulting `ring` objects are not usable, so the
+script only checks. If a `ring` upgrade needs another header, add it to the stub
+list in the script. On macOS the script prints a note and exits 0.
+
+A pass means the macOS-target code type-checks, borrow-checks, and is
+Clippy-clean. It does not show that the code links or runs, that AppKit behaves
+as intended, or that the macOS unit tests pass. AppKit changes still need the
+macOS CI jobs.
 Install the audit tools separately from the app's Rust toolchain:
 
 ```sh
@@ -85,6 +100,7 @@ Cargo Deny's advisory fetch is a separate operation; `cargo deny --offline
 |---|---|---|
 | fmt, Clippy, tests | Rust 1.88, current host | Current stable on Ubuntu and macOS |
 | Release-toolchain compatibility | Same pinned local toolchain | Rust 1.88 tests on macOS, including AppKit |
+| macOS-only code on a Linux host | `./scripts/check-macos.sh` (type-check and Clippy only; no link, no tests) | Rust 1.88 and stable tests on macOS |
 | Release build and package | `./scripts/package-app.sh` then `./scripts/verify-app.sh` | Stable binary build; Rust 1.88 package verification in both `ci` and `bundle` |
 | Workflows and shell scripts | `actionlint -color` and `shellcheck scripts/*.sh` | Checksum-pinned actionlint 1.7.12 plus runner ShellCheck |
 | Dependency policy | Cargo Deny when installed | Required `cargo-deny` job |
